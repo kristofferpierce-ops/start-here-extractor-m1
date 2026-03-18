@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/start_here_extractor/inventory.schema.json",
+  "title": "Start Here Extractor Inventory Record",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "generated_at",
+    "outcome",
+    "zip_path",
+    "zip_file",
+    "settings",
+    "inspection",
+    "errors",
+    "warnings"
+  ],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "outcome": {"type": "string", "enum": ["inspected", "extracted", "no_match", "error"]},
+    "zip_path": {"type": "string"},
+    "start_here": {"type": ["string", "null"]},
+    "size_bytes": {"type": ["integer", "null"]},
+    "md5": {"type": ["string", "null"]},
+    "encoding": {"type": ["string", "null"]},
+    "preview_text": {"type": ["string", "null"]},
+    "scan": {"type": ["object", "null"]},
+    "warnings": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "zip_file": {
+      "type": "object",
+      "required": ["path", "size_bytes", "sha256", "md5"],
+      "properties": {
+        "path": {"type": "string"},
+        "size_bytes": {"type": "integer"},
+        "sha256": {"type": "string"},
+        "md5": {"type": "string"}
+      }
+    },
+    "settings": {"type": "object"},
+    "inspection": {"type": "object"},
+    "selected_candidate": {"type": ["object", "null"]},
+    "extracted_file": {"type": ["object", "null"]},
+    "preview": {"type": ["object", "null"]},
+    "av": {"type": ["object", "null"]},
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["type", "message"],
+        "properties": {
+          "type": {"type": "string"},
+          "message": {"type": "string"}
+        }
+      }
+    },
+    "risk_flags": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  },
+  "additionalProperties": true
+}

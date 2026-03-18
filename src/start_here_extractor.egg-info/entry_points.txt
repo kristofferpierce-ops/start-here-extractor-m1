@@ -1,0 +1,2 @@
+[console_scripts]
+start-here-extractor = start_here_extractor.cli:main
