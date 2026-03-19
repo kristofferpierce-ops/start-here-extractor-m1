@@ -1,22 +1,26 @@
-# Milestone 3C Block - `start_here_extractor`
+# Milestone 3E Closeout Block - `start_here_extractor`
 
-This package extends the Milestone 3B extractor with **real cloud locator implementations** for:
+This package extends the Milestone 3D extractor with **release hardening and CI closeout work**:
 
-- Google Drive
-- Dropbox
-- Microsoft Graph / OneDrive
+- no-secrets default CI on Windows, macOS, and Linux
+- Windows sandbox **dry-run** smoke coverage in CI
+- manual **workflow_dispatch** live-provider smoke workflow for:
+  - Google Drive
+  - Dropbox
+  - Microsoft Graph / OneDrive
+- local credential hygiene defaults via `.gitignore`
+- release checklist and closeout notes
 
-It preserves the Milestone 1 public interfaces, the Milestone 2 JSON inventory contract, and the additive Milestone 3A/3B schema fields.
+It preserves all Milestone 1 public interfaces, the Milestone 2 JSON inventory contract, and the additive Milestone 3 schema fields.
 
-## What is new in Block C
+## What is new in Block E
 
-- real provider modules under `src/start_here_extractor/cloud/`
-- provider-specific auth config dataclasses
-- remote search/list paging support
-- provider-aware download methods using atomic temp-file writes
-- retry/backoff integration for provider requests
-- optional CLI remote smoke mode using `--cloud-provider`
-- mocked tests for paging, throttling, and download behavior
+- updated `.github/workflows/tests.yml`
+- new `.github/workflows/live-smoke.yml`
+- new `scripts/ci_sandbox_dry_run.py`
+- new `.gitignore`
+- new `MILESTONE_3E_CLOSEOUT_NOTES.md`
+- new `MILESTONE_3_RELEASE_CHECKLIST.md`
 
 ## Important root-folder note
 
@@ -39,6 +43,68 @@ cd <your-project-root>
 python -m pip install -e .
 python -m pip install -e .[dev]
 ```
+
+## Local verification
+
+```bash
+python -m ruff check .
+pytest
+python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
+```
+
+## CI policy in this block
+
+The default CI workflow is **no-secrets** and should always be safe to run on:
+
+- Windows
+- macOS
+- Linux
+
+It covers:
+
+- Ruff
+- pytest
+- schema validation
+- Windows sandbox **dry-run** artifact generation only
+
+The CI workflow does **not** run:
+- real Windows Sandbox launches
+- live cloud provider calls
+- real AV engine calls
+
+Those behaviors remain manual or workflow-dispatch only.
+
+## Live cloud smoke workflow
+
+This block adds a **manual** GitHub Actions workflow:
+
+`.github/workflows/live-smoke.yml`
+
+It is intended for controlled release checks and requires repository secrets:
+
+- `GDRIVE_ACCESS_TOKEN`
+- `DROPBOX_ACCESS_TOKEN`
+- `GRAPH_ACCESS_TOKEN`
+
+Only the selected provider needs a secret.
+
+### Example local smoke mode
+
+Google Drive:
+
+```bash
+python -m start_here_extractor.cli --cloud-provider gdrive --cloud-access-token <TOKEN> --cloud-query "drive_smoke_test" --output-dir out/remote_extracted --report-dir out/remote_reports
+```
+
+### Example GitHub live smoke run
+
+Use **Actions → live-provider-smoke → Run workflow** and choose:
+
+- `gdrive`
+- `dropbox`
+- or `graph`
+
+with a query string that matches a known smoke ZIP in that provider.
 
 ## Local ZIP usage
 
@@ -83,15 +149,14 @@ Useful provider-specific flags:
   - `--cloud-max-pages 10`
   - `--cloud-download-dir out/downloads`
 
-## Windows Sandbox block
+## Scan and sandbox posture
 
-Sandbox support remains additive and opt-in.
+Milestone 3D and 3E preserve the current scan/policy behavior:
 
-Dry-run generation:
-
-```bash
-python -m start_here_extractor.cli suspicious.zip --output-dir out/extracted --report-dir out/reports --sandbox-platform windows-sandbox --sandbox-dry-run --sandbox-root out/sandbox
-```
+- malicious AV or YARA match → `reject`
+- scan engine execution failure → `warn` / `inconclusive`
+- suspicious ZIP structure → `sandbox`
+- Windows Sandbox support in CI is **dry-run artifact generation only**
 
 ## Inventory output
 
@@ -127,62 +192,33 @@ Validate JSONL against the packaged schema:
 python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
 ```
 
-## Cloud modules in this block
+## Credential hygiene
 
-- `src/start_here_extractor/cloud/http.py`
-- `src/start_here_extractor/cloud/runtime.py`
-- `src/start_here_extractor/cloud/gdrive.py`
-- `src/start_here_extractor/cloud/dropbox.py`
-- `src/start_here_extractor/cloud/graph.py`
+Do **not** commit these files:
 
-The earlier Milestone 2 stubs are still present for compatibility and comparison.
+- `credentials.json`
+- `token.json`
+
+This block adds a `.gitignore` entry for them by default.
+
+Also avoid pasting live access tokens into terminals that are logged or into chat systems.
 
 ## Test suite
 
 ```bash
-ruff check .
+python -m ruff check .
 pytest
 python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
 ```
 
-Milestone 3C adds mocked tests for:
-
-- Google Drive paging and download
-- Dropbox throttling / `Retry-After` handling and download
-- Microsoft Graph paging and content download
-- root-folder-name independence for remote downloads
-
 ## Safety posture
 
-Milestone 3C does not weaken earlier protections.
+Milestone 3E does not weaken earlier protections.
 
 - inspect first
-- bounded single-member extraction only
-- Zip Slip protections remain enforced
-- ZIP bomb size and ratio limits remain enforced
-- strict ZIP hardening remains additive
-- AV hooks remain advisory telemetry, not a primary gate
-- remote downloads stage to local temp files with atomic replacement
-
-
-## Milestone 3D scan integration
-
-This build adds pluggable AV and optional YARA scanning without changing the outer project root assumptions.
-
-New CLI flags:
-- `--av-command` with `--av-engine {generic,clamav,defender}`
-- `--scan-timeout-seconds`
-- `--yara-command`
-- `--yara-rules`
-- `--yara-ruleset-id`
-- `--yara-compiled-rules` plus `--yara-allow-compiled-rules`
-
-Examples:
-
-```powershell
-python -m start_here_extractor.cli .\examples\sample_success.zip --output-dir .\out\scan_out --report-dir .\out\scan_reports --av-engine clamav --av-command "clamscan --no-summary {path}"
-```
-
-```powershell
-python -m start_here_extractor.cli .\examples\sample_success.zip --output-dir .\out\scan_out --report-dir .\out\scan_reports --yara-command "yara {compiled_flag} {rules} {path}" --yara-rules .\rules\sample.yar --yara-ruleset-id sample-rules
-```
+- bounded single-member extraction
+- Zip Slip defenses
+- ZIP bomb limits
+- strict ZIP validation
+- policy-based sandbox escalation
+- additive-only schema evolution

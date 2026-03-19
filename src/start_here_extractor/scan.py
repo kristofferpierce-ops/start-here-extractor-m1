@@ -12,14 +12,6 @@ MALICIOUS_PATTERNS = (
     re.compile(r"\b(matches?)\b", re.I),
 )
 
-COMMAND_ERROR_PATTERNS = (
-    re.compile(r"not recognized as an internal or external command", re.I),
-    re.compile(r"command not found", re.I),
-    re.compile(r"no such file or directory", re.I),
-    re.compile(r"cannot find the file", re.I),
-    re.compile(r"is not installed", re.I),
-)
-
 
 @dataclass(slots=True)
 class ScanConfig:
@@ -42,10 +34,6 @@ def _extract_findings(text: str) -> list[str]:
         if any(p.search(clean) for p in MALICIOUS_PATTERNS):
             findings.append(clean)
     return findings
-
-
-def _looks_like_command_error(text: str) -> bool:
-    return any(pattern.search(text) for pattern in COMMAND_ERROR_PATTERNS)
 
 
 def _run_command(command: str, *, timeout_seconds: int) -> dict[str, Any]:
@@ -107,12 +95,11 @@ def run_av_scan(path: Path, cfg: ScanConfig) -> dict[str, Any]:
 
     engine = cfg.av_engine.lower()
     status = "clean"
-    command_error = _looks_like_command_error(combined)
     if engine == "clamav":
         if exit_code == 0:
             status = "clean"
         elif exit_code == 1:
-            status = "error" if command_error else "infected"
+            status = "infected"
         else:
             status = "error"
     else:

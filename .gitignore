@@ -1,0 +1,19 @@
+# Local OAuth and access credentials
+credentials.json
+token.json
+
+# Local test and smoke output
+out/
+*.log
+
+# Python caches and environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+*.egg-info/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db

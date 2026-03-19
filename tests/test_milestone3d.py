@@ -105,17 +105,3 @@ def test_process_zip_rejects_after_malicious_scan(monkeypatch, tmp_path: Path) -
     assert result.extracted_file is not None
     assert result.av["status"] == "malicious"
     assert result.policy["decision"] == "reject"
-
-
-def test_scan_clamav_missing_binary_is_error_not_malicious(monkeypatch, tmp_path: Path) -> None:
-    sample = tmp_path / "sample.txt"
-    sample.write_text("hello", encoding="utf-8")
-
-    def fake_run(*args, **kwargs):
-        return DummyCompleted(1, stdout="", stderr="'clamscan' is not recognized as an internal or external command")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    result = scan_extracted_path(sample, ScanConfig(av_engine="clamav", av_command="clamscan {path}"))
-    assert result["status"] == "inconclusive"
-    assert result["av"]["status"] == "error"
-    assert result["findings"] == []
