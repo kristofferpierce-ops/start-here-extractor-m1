@@ -8,7 +8,7 @@ from typing import Dict
 from .utils import ensure_dir, safe_slug
 
 
-SCHEMA_VERSION = "3.1"
+SCHEMA_VERSION = "3.2"
 
 
 def utcnow_iso() -> str:
@@ -30,7 +30,7 @@ def build_inventory_record(payload: Dict[str, object]) -> Dict[str, object]:
         "exit_code": None,
         "findings": [],
         "av": {"engine": None, "status": "not-run", "exit_code": None, "findings": []},
-        "yara": {"status": "not-run", "matches": []},
+        "yara": {"ruleset_id": None, "status": "not-run", "matches": [], "compiled_rules": False},
     }
     risk_flags = list(record.get("risk_flags") or [])
     policy = record.get("policy") or {}

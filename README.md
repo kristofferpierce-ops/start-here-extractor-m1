@@ -163,3 +163,26 @@ Milestone 3C does not weaken earlier protections.
 - strict ZIP hardening remains additive
 - AV hooks remain advisory telemetry, not a primary gate
 - remote downloads stage to local temp files with atomic replacement
+
+
+## Milestone 3D scan integration
+
+This build adds pluggable AV and optional YARA scanning without changing the outer project root assumptions.
+
+New CLI flags:
+- `--av-command` with `--av-engine {generic,clamav,defender}`
+- `--scan-timeout-seconds`
+- `--yara-command`
+- `--yara-rules`
+- `--yara-ruleset-id`
+- `--yara-compiled-rules` plus `--yara-allow-compiled-rules`
+
+Examples:
+
+```powershell
+python -m start_here_extractor.cli .\examples\sample_success.zip --output-dir .\out\scan_out --report-dir .\out\scan_reports --av-engine clamav --av-command "clamscan --no-summary {path}"
+```
+
+```powershell
+python -m start_here_extractor.cli .\examples\sample_success.zip --output-dir .\out\scan_out --report-dir .\out\scan_reports --yara-command "yara {compiled_flag} {rules} {path}" --yara-rules .\rules\sample.yar --yara-ruleset-id sample-rules
+```

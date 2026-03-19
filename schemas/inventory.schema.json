@@ -67,7 +67,97 @@
       "type": [
         "object",
         "null"
-      ]
+      ],
+      "properties": {
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "engine": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "av": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "engine": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "exit_code": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "yara": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "ruleset_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "matches": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "compiled_rules": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        }
+      }
     },
     "warnings": {
       "type": "array",

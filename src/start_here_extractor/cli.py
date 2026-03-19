@@ -35,7 +35,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--preview-bytes", type=int, default=4096)
     parser.add_argument("--preview-lines", type=int, default=40)
     parser.add_argument("--strict-verify", action="store_true")
-    parser.add_argument("--av-command", default=None, help="Advisory command template containing {path}")
+    parser.add_argument("--av-command", default=None, help="Advisory AV command template containing {path}")
+    parser.add_argument("--av-engine", choices=["generic", "clamav", "defender"], default="generic", help="AV engine hint for exit-code interpretation")
+    parser.add_argument("--scan-timeout-seconds", type=int, default=60, help="Timeout applied to AV and YARA command execution")
+    parser.add_argument("--yara-command", default=None, help="Optional YARA command template containing {path}, {rules}, and {compiled_flag}")
+    parser.add_argument("--yara-rules", default=None, help="Optional YARA rules path")
+    parser.add_argument("--yara-ruleset-id", default=None, help="Optional YARA ruleset identifier stored in inventory")
+    parser.add_argument("--yara-compiled-rules", action="store_true", help="Mark the provided YARA rules path as compiled rules")
+    parser.add_argument("--yara-allow-compiled-rules", action="store_true", help="Explicitly allow running compiled YARA rules")
     parser.add_argument("--allow-symlink-traversal", action="store_true")
     parser.add_argument(
         "--strict-zip-validation",
@@ -152,6 +159,13 @@ def main(argv: List[str] | None = None) -> int:
         strict_verify=args.strict_verify,
         allow_symlink_traversal=args.allow_symlink_traversal,
         av_command=args.av_command,
+        av_engine=args.av_engine,
+        scan_timeout_seconds=args.scan_timeout_seconds,
+        yara_command=args.yara_command,
+        yara_rules=args.yara_rules,
+        yara_ruleset_id=args.yara_ruleset_id,
+        yara_compiled_rules=bool(args.yara_compiled_rules),
+        yara_allow_compiled_rules=bool(args.yara_allow_compiled_rules),
         strict_zip_validation=bool(args.strict_zip_validation),
         sandbox_platform=args.sandbox_platform,
         sandbox_dry_run=bool(args.sandbox_dry_run),
@@ -171,6 +185,10 @@ def main(argv: List[str] | None = None) -> int:
         parser.error("--durable-jsonl is only valid with --all")
     if args.sandbox_dry_run and not args.sandbox_platform:
         parser.error("--sandbox-dry-run requires --sandbox-platform")
+    if args.yara_command and not args.yara_rules:
+        parser.error("--yara-command requires --yara-rules")
+    if args.yara_compiled_rules and not args.yara_allow_compiled_rules:
+        parser.error("--yara-compiled-rules requires --yara-allow-compiled-rules")
     if args.cloud_provider and (args.paths or args.root):
         parser.error("Use either local paths/roots or --cloud-provider, not both")
     if args.cloud_provider and not args.cloud_access_token:

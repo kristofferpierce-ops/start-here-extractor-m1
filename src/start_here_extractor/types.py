@@ -28,6 +28,13 @@ class ExtractSettings:
     strict_verify: bool = False
     allow_symlink_traversal: bool = False
     av_command: Optional[str] = None
+    av_engine: str = "generic"
+    scan_timeout_seconds: int = 60
+    yara_command: Optional[str] = None
+    yara_rules: Optional[str] = None
+    yara_ruleset_id: Optional[str] = None
+    yara_compiled_rules: bool = False
+    yara_allow_compiled_rules: bool = False
     strict_zip_validation: bool = True
     sandbox_platform: Optional[str] = None
     sandbox_dry_run: bool = False

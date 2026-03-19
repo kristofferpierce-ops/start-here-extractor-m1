@@ -14,6 +14,7 @@ src/start_here_extractor/policy.py
 src/start_here_extractor/processor.py
 src/start_here_extractor/reader.py
 src/start_here_extractor/reporter.py
+src/start_here_extractor/scan.py
 src/start_here_extractor/types.py
 src/start_here_extractor/utils.py
 src/start_here_extractor.egg-info/PKG-INFO
@@ -48,3 +49,4 @@ tests/test_milestone1.py
 tests/test_milestone3a.py
 tests/test_milestone3b.py
 tests/test_milestone3c.py
+tests/test_milestone3d.py
