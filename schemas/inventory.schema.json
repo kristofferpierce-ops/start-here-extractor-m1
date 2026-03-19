@@ -15,50 +15,397 @@
     "warnings"
   ],
   "properties": {
-    "schema_version": {"type": "string"},
-    "generated_at": {"type": "string"},
-    "outcome": {"type": "string", "enum": ["inspected", "extracted", "no_match", "error"]},
-    "zip_path": {"type": "string"},
-    "start_here": {"type": ["string", "null"]},
-    "size_bytes": {"type": ["integer", "null"]},
-    "md5": {"type": ["string", "null"]},
-    "encoding": {"type": ["string", "null"]},
-    "preview_text": {"type": ["string", "null"]},
-    "scan": {"type": ["object", "null"]},
+    "schema_version": {
+      "type": "string"
+    },
+    "generated_at": {
+      "type": "string"
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "inspected",
+        "extracted",
+        "no_match",
+        "error"
+      ]
+    },
+    "zip_path": {
+      "type": "string"
+    },
+    "start_here": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "size_bytes": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "md5": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "encoding": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "preview_text": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "scan": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "warnings": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
     },
     "zip_file": {
       "type": "object",
-      "required": ["path", "size_bytes", "sha256", "md5"],
+      "required": [
+        "path",
+        "size_bytes",
+        "sha256",
+        "md5"
+      ],
       "properties": {
-        "path": {"type": "string"},
-        "size_bytes": {"type": "integer"},
-        "sha256": {"type": "string"},
-        "md5": {"type": "string"}
+        "path": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "md5": {
+          "type": "string"
+        }
       }
     },
-    "settings": {"type": "object"},
-    "inspection": {"type": "object"},
-    "selected_candidate": {"type": ["object", "null"]},
-    "extracted_file": {"type": ["object", "null"]},
-    "preview": {"type": ["object", "null"]},
-    "av": {"type": ["object", "null"]},
+    "settings": {
+      "type": "object"
+    },
+    "inspection": {
+      "type": "object"
+    },
+    "selected_candidate": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "extracted_file": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "preview": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "av": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
     "errors": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["type", "message"],
+        "required": [
+          "type",
+          "message"
+        ],
         "properties": {
-          "type": {"type": "string"},
-          "message": {"type": "string"}
+          "type": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
         }
       }
     },
     "risk_flags": {
       "type": "array",
-      "items": {"type": "string"}
+      "items": {
+        "type": "string"
+      }
+    },
+    "run": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "string"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "host": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "provenance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "source_type": {
+          "type": "string"
+        },
+        "local_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remote_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "etag": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "modified": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fetched_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "staging_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "sandbox": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config_summary": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ended_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit_code": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "artifacts_dir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dry_run": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "config_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sentinel_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timed_out": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "zip_hardening": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "strict_mode": {
+          "type": "boolean"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "suspicious": {
+          "type": "boolean"
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "reason": {
+          "type": "string"
+        }
+      }
+    },
+    "policy": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "warn",
+            "sandbox",
+            "reject"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "batch": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "job_id": {
+          "type": "string"
+        },
+        "attempt": {
+          "type": "integer"
+        },
+        "max_attempts": {
+          "type": "integer"
+        },
+        "retry_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "text_summary": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "match": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "extraction": {
+      "type": [
+        "object",
+        "null"
+      ]
     }
   },
   "additionalProperties": true

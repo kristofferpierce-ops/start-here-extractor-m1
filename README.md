@@ -1,42 +1,45 @@
-# Milestone 1 - `start_here_extractor`
+# Milestone 3B Block - `start_here_extractor`
 
-This package implements the Milestone 1 deliverable described in the uploaded blueprint PDF and technical overview:
+This package extends the Milestone 3A extractor with the Windows Sandbox orchestration block:
 
-- inspect-first ZIP processing
-- extract-minimally, only one selected `START HERE` candidate
-- deterministic matching policy
-- Zip Slip defenses
-- ZIP bomb/resource-cap defenses
-- bounded preview with encoding fallback
-- optional advisory AV hook
-- JSONL inventory output for every run
-- schema validation tooling
-- cross-platform CI with lint and tests
+- strict ZIP hardening with central-directory vs local-header reconciliation
+- additive policy decisions: `allow`, `warn`, `sandbox`, `reject`
+- retry/backoff utilities with `Retry-After` support for future provider integrations
+- single-writer JSONL output with optional `fsync` durability
+- Windows Sandbox Runner v1 with hardened `.wsb` generation, staging/results folder mapping, completion sentinel handling, and dry-run mode
+- additive inventory schema blocks for `run`, `provenance`, `zip_hardening`, `policy`, `sandbox`, and `batch`
 
-## Default policy choices
+Milestone 1 public interfaces and the Milestone 2 JSON contract remain intact:
 
-These are sensible defaults because the PDF leaves some values open:
+- single-ZIP and per-ZIP runs still work
+- batch mode still writes one JSON object per line with no wrapper record types
+- the original compatibility fields remain present
+- the same inspect-first, extract-minimally safety posture remains in place
 
-- canonical target name: any basename that normalizes to `starthere`
-- allowed extensions: `.txt`, `.md`
-- tie policy: `prefer`
-- preferred extension order: `.txt`, then `.md`
-- output mode: flatten to `start_here.<ext>` under the chosen output directory
-- strict CRC/header verification: off by default
-- advisory AV hook: off by default
+## Important root-folder note
 
-Default safety limits:
+The **outer project folder name is not hardcoded**.
 
-- `max_entries = 10000`
-- `max_member_bytes = 5_242_880` (5 MiB)
-- `max_ratio = 100.0`
-- `preview_bytes = 4096`
-- `preview_lines = 40`
+You can rename the extracted project root folder to whatever you want, as long as the internal structure stays the same:
+
+- `.github/`
+- `examples/`
+- `schemas/`
+- `scripts/`
+- `src/`
+- `tests/`
+- `pyproject.toml`
+
+So these all work equally well:
+
+- `start_here_extractor_m3_block_a`
+- `start_here_extractor`
+- `my_zip_tool`
 
 ## Install
 
 ```bash
-cd start_here_extractor_m1_completion
+cd <your-project-root>
 python -m pip install -e .
 ```
 
@@ -46,56 +49,98 @@ For local development tools:
 python -m pip install -e .[dev]
 ```
 
-## Basic usage
+## Basic single-run usage
 
-Process a single ZIP:
+Process a single ZIP and write one per-ZIP inventory file:
 
 ```bash
 python -m start_here_extractor.cli sample.zip --output-dir out/extracted --report-dir out/reports
 ```
 
-Process all ZIPs under a root:
+Process discovered ZIPs under a root in the original Milestone 1 style:
 
 ```bash
 python -m start_here_extractor.cli --root incoming_zips --output-dir out/extracted --report-dir out/reports
 ```
 
-Use strict ambiguity handling:
+## Batch mode
+
+Batch mode remains additive and opt-in.
 
 ```bash
-python -m start_here_extractor.cli sample.zip --tie-policy error
+python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports
 ```
 
-Turn on strict verification:
+Use a specific shared JSONL output path:
 
 ```bash
-python -m start_here_extractor.cli sample.zip --strict-verify
+python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports --jsonl-out out/reports/inventories.jsonl
 ```
 
-Optional AV telemetry hook:
+Stop after the first ZIP with recorded errors:
 
 ```bash
-python -m start_here_extractor.cli sample.zip --av-command "python scanner.py {path}"
+python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports --fail-fast
 ```
+
+Force per-line durability in batch JSONL mode:
+
+```bash
+python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports --jsonl-out out/reports/inventories.jsonl --durable-jsonl
+```
+
+Disable strict ZIP hardening if you are doing compatibility triage and want to compare behavior:
+
+```bash
+python -m start_here_extractor.cli sample.zip --output-dir out/extracted --report-dir out/reports --no-strict-zip-validation
+```
+
+### Batch mode guarantees
+
+- output file is UTF-8 JSON Lines with `\n` line endings and no BOM
+- each ZIP produces exactly one JSON record line
+- records are appended one at a time by a single writer
+- discovery order is normalized by deterministic sorted path order in batch mode
+- one bad ZIP does not stop the batch unless `--fail-fast` is set
+- optional `--durable-jsonl` flushes and `fsync`s each line for stronger crash durability
+
+## Windows Sandbox block (Milestone 3B)
+
+Sandbox support is additive and opt-in.
+
+Generate hardened Windows Sandbox artifacts without launching the sandbox:
+
+```bash
+python -m start_here_extractor.cli suspicious.zip --output-dir out/extracted --report-dir out/reports --sandbox-platform windows-sandbox --sandbox-dry-run
+```
+
+Common sandbox flags:
+
+- `--sandbox-platform windows-sandbox`
+- `--sandbox-dry-run`
+- `--sandbox-timeout-seconds 120`
+- `--sandbox-root out/sandbox`
+- `--sandbox-command "Write-Host 'hello from sandbox'"`
+- `--sandbox-enable-network`
+- `--sandbox-enable-clipboard`
+- `--sandbox-enable-vgpu`
+
+Default hardened Windows Sandbox settings in this block:
+
+- networking disabled
+- clipboard redirection disabled
+- vGPU disabled
+- staging folder mapped read-only
+- results folder mapped writable
+- `LogonCommand` points to a pre-staged PowerShell job script
+
+This block focuses on orchestration and dry-run validation. It does **not** claim full in-sandbox extraction and scanning yet.
 
 ## Inventory output
 
-Each processed ZIP produces one UTF-8 JSON Lines inventory file under `--report-dir`.
+### Stable compatibility fields
 
-- file naming pattern: `<slugified-zip-stem>.inventory.jsonl`
-- each file currently contains one JSON record line plus a trailing newline
-- the record includes both a compact summary and the richer nested inspection payload
-
-### Important filename note
-
-Report filenames are **slugified**, so punctuation and spaces are normalized and underscores become hyphens.
-
-Examples:
-
-- `sample_success.zip` -> `sample-success.inventory.jsonl`
-- `My ZIP File.zip` -> `my-zip-file.inventory.jsonl`
-
-Top-level compatibility fields include:
+These remain available for Milestone 1 and Milestone 2 consumers:
 
 - `zip_path`
 - `start_here`
@@ -107,26 +152,44 @@ Top-level compatibility fields include:
 - `errors`
 - `warnings`
 
-The richer nested fields are preserved too:
+### Additive Milestone 3 fields
 
-- `zip_file`
-- `settings`
-- `inspection`
-- `selected_candidate`
-- `extracted_file`
-- `preview`
-- `av`
-- `risk_flags`
+These are additive only:
 
-Validate JSONL records against the packaged schema:
+- `run`
+- `provenance`
+- `zip_hardening`
+- `policy`
+- `sandbox`
+- `batch`
+- `text_summary`
+- `match`
+- `extraction`
+
+Validate JSONL against the packaged schema:
 
 ```bash
 python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
 ```
 
+## Cloud locator scaffolding
+
+The Milestone 2 provider stubs remain under `src/start_here_extractor/cloud/`.
+
+This Milestone 3A block does **not** turn them into live network integrations yet. It only adds the lower-level reliability and policy pieces they will use later.
+
+## New internal modules in this block
+
+- `src/start_here_extractor/sandbox/base.py`
+- `src/start_here_extractor/sandbox/windows.py`
+- `src/start_here_extractor/zip_hardening/strict_validator.py`
+- `src/start_here_extractor/policy.py`
+- `src/start_here_extractor/net/retry.py`
+- `src/start_here_extractor/io/jsonl_writer.py`
+
 ## PowerShell helper
 
-A parity helper is included at `scripts/start_here_helper.ps1`.
+The parity helper remains at `scripts/start_here_helper.ps1`.
 
 Examples:
 
@@ -135,49 +198,37 @@ Examples:
 ./scripts/start_here_helper.ps1 -ZipPath .\sample.zip -Mode Extract -OutputDir .\out
 ```
 
-The PowerShell helper is intentionally focused on **inspect** and **extract** parity. It does not replace the full Python reporting pipeline, and it does not emit the same JSONL inventory files as the Python CLI.
+The PowerShell helper is still focused on inspect/extract parity. It does not replace the Python batch JSONL pipeline.
 
 ## Test suite
 
-Run the acceptance and hardening suite:
+Run the full suite:
 
 ```bash
+ruff check .
 pytest
+python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
 ```
 
-It covers the Milestone 1 acceptance cases T1-T7 and additional explicit edge cases:
+Milestone 3B adds tests for:
 
-- case-insensitive match
-- prefer `.txt` over `.md`
-- ambiguity error mode
-- Zip Slip rejection
-- declared size cap rejection
-- compression ratio rejection
-- UTF-16 preview fallback
-- absolute root and Windows-drive path rejection
-- no-match inventory emission
-- CP437 non-ASCII filename decoding
+- central-directory vs local-header mismatch detection
+- data descriptor ambiguity flags
+- duplicate name detection
+- retry/backoff honoring `Retry-After`
+- durable JSONL writer behavior
+- project-root-folder-name independence
+- hardened `.wsb` XML generation
+- sandbox dry-run artifact emission
+- sandbox policy + processor integration for suspicious ZIPs
 
-## CI
+## Safety posture
 
-The CI workflow runs on:
+Milestone 3B does not weaken earlier protections.
 
-- Windows
-- macOS
-- Linux
-
-and executes:
-
-- `ruff check .`
-- `pytest`
-- `python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl`
-
-## Remaining user-specified values
-
-The PDFs still leave these user decisions open:
-
-- exact matching aliases beyond `starthere`
-- final safety limits
-- whether strict verification should default on
-- which AV tools to standardize in production
-- whether to collapse per-ZIP JSONL files into one append-only batch report in Milestone 2
+- inspect first
+- bounded single-member extraction only
+- Zip Slip protections remain enforced
+- ZIP bomb size and ratio limits remain enforced
+- strict ZIP hardening is additive, not a replacement for the original limits
+- AV hooks remain advisory telemetry, not a primary gate

@@ -8,7 +8,7 @@ from typing import Dict
 from .utils import ensure_dir, safe_slug
 
 
-SCHEMA_VERSION = "1.1"
+SCHEMA_VERSION = "3.1"
 
 
 def utcnow_iso() -> str:
@@ -24,8 +24,16 @@ def build_inventory_record(payload: Dict[str, object]) -> Dict[str, object]:
     selected = record.get("selected_candidate") or {}
     extracted = record.get("extracted_file") or {}
     preview = record.get("preview") or {}
-    av = record.get("av") or {"status": "not-run"}
+    av = record.get("av") or {
+        "status": "not-run",
+        "engine": None,
+        "exit_code": None,
+        "findings": [],
+        "av": {"engine": None, "status": "not-run", "exit_code": None, "findings": []},
+        "yara": {"status": "not-run", "matches": []},
+    }
     risk_flags = list(record.get("risk_flags") or [])
+    policy = record.get("policy") or {}
 
     record.setdefault("zip_path", zip_file.get("path"))
     record.setdefault("start_here", selected.get("name"))
@@ -34,9 +42,46 @@ def build_inventory_record(payload: Dict[str, object]) -> Dict[str, object]:
     record.setdefault("encoding", preview.get("encoding"))
     record.setdefault("preview_text", preview.get("text"))
     record.setdefault("scan", av)
-    record.setdefault("warnings", risk_flags)
+    warnings = list(record.get("warnings") or [])
+    warnings.extend(flag for flag in risk_flags if flag not in warnings)
+    if policy.get("decision") in {"warn", "sandbox"}:
+        for note in [policy.get("reason"), *(policy.get("notes") or [])]:
+            if note and note not in warnings:
+                warnings.append(str(note))
+    record["warnings"] = warnings
     record.setdefault("errors", [])
 
+    record.setdefault(
+        "text_summary",
+        {
+            "preview": preview.get("text"),
+            "encoding": preview.get("encoding"),
+            "truncated": False,
+        }
+        if preview
+        else None,
+    )
+    record.setdefault(
+        "match",
+        {
+            "candidate_names": [candidate.get("name") for candidate in (record.get("inspection") or {}).get("candidates", [])],
+            "selected": selected.get("name"),
+        },
+    )
+    record.setdefault(
+        "extraction",
+        {
+            "mode": "single-member" if extracted else None,
+            "output_path": extracted.get("path"),
+            "bytes_written": extracted.get("size_bytes"),
+        },
+    )
+    record.setdefault("run", None)
+    record.setdefault("provenance", None)
+    record.setdefault("sandbox", None)
+    record.setdefault("zip_hardening", None)
+    record.setdefault("policy", None)
+    record.setdefault("batch", None)
     return record
 
 

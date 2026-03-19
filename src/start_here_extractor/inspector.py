@@ -30,6 +30,9 @@ def inspect_zip(zip_path: Path, limits: Limits) -> Tuple[List[EntryInfo], Dict[s
                     risk_flags.append(f"declared-size-cap:{info.filename}")
                 if ratio is not None and ratio > limits.max_ratio:
                     risk_flags.append(f"compression-ratio-cap:{info.filename}")
+                if suspicious:
+                    for reason in reasons:
+                        risk_flags.append(f"suspicious-member-path:{reason}:{info.filename}")
 
             entries.append(
                 EntryInfo(
