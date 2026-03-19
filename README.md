@@ -1,20 +1,22 @@
-# Milestone 3B Block - `start_here_extractor`
+# Milestone 3C Block - `start_here_extractor`
 
-This package extends the Milestone 3A extractor with the Windows Sandbox orchestration block:
+This package extends the Milestone 3B extractor with **real cloud locator implementations** for:
 
-- strict ZIP hardening with central-directory vs local-header reconciliation
-- additive policy decisions: `allow`, `warn`, `sandbox`, `reject`
-- retry/backoff utilities with `Retry-After` support for future provider integrations
-- single-writer JSONL output with optional `fsync` durability
-- Windows Sandbox Runner v1 with hardened `.wsb` generation, staging/results folder mapping, completion sentinel handling, and dry-run mode
-- additive inventory schema blocks for `run`, `provenance`, `zip_hardening`, `policy`, `sandbox`, and `batch`
+- Google Drive
+- Dropbox
+- Microsoft Graph / OneDrive
 
-Milestone 1 public interfaces and the Milestone 2 JSON contract remain intact:
+It preserves the Milestone 1 public interfaces, the Milestone 2 JSON inventory contract, and the additive Milestone 3A/3B schema fields.
 
-- single-ZIP and per-ZIP runs still work
-- batch mode still writes one JSON object per line with no wrapper record types
-- the original compatibility fields remain present
-- the same inspect-first, extract-minimally safety posture remains in place
+## What is new in Block C
+
+- real provider modules under `src/start_here_extractor/cloud/`
+- provider-specific auth config dataclasses
+- remote search/list paging support
+- provider-aware download methods using atomic temp-file writes
+- retry/backoff integration for provider requests
+- optional CLI remote smoke mode using `--cloud-provider`
+- mocked tests for paging, throttling, and download behavior
 
 ## Important root-folder note
 
@@ -30,111 +32,66 @@ You can rename the extracted project root folder to whatever you want, as long a
 - `tests/`
 - `pyproject.toml`
 
-So these all work equally well:
-
-- `start_here_extractor_m3_block_a`
-- `start_here_extractor`
-- `my_zip_tool`
-
 ## Install
 
 ```bash
 cd <your-project-root>
 python -m pip install -e .
-```
-
-For local development tools:
-
-```bash
 python -m pip install -e .[dev]
 ```
 
-## Basic single-run usage
+## Local ZIP usage
 
-Process a single ZIP and write one per-ZIP inventory file:
+Single ZIP:
 
 ```bash
 python -m start_here_extractor.cli sample.zip --output-dir out/extracted --report-dir out/reports
 ```
 
-Process discovered ZIPs under a root in the original Milestone 1 style:
-
-```bash
-python -m start_here_extractor.cli --root incoming_zips --output-dir out/extracted --report-dir out/reports
-```
-
-## Batch mode
-
-Batch mode remains additive and opt-in.
-
-```bash
-python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports
-```
-
-Use a specific shared JSONL output path:
-
-```bash
-python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports --jsonl-out out/reports/inventories.jsonl
-```
-
-Stop after the first ZIP with recorded errors:
-
-```bash
-python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports --fail-fast
-```
-
-Force per-line durability in batch JSONL mode:
+Batch mode:
 
 ```bash
 python -m start_here_extractor.cli --all --root incoming_zips --output-dir out/extracted --report-dir out/reports --jsonl-out out/reports/inventories.jsonl --durable-jsonl
 ```
 
-Disable strict ZIP hardening if you are doing compatibility triage and want to compare behavior:
+## Remote cloud smoke mode
+
+Remote mode is additive and opt-in.
+
+General pattern:
 
 ```bash
-python -m start_here_extractor.cli sample.zip --output-dir out/extracted --report-dir out/reports --no-strict-zip-validation
+python -m start_here_extractor.cli --cloud-provider <gdrive|dropbox|graph> --cloud-access-token <TOKEN> --cloud-query "start here" --output-dir out/extracted --report-dir out/reports
 ```
 
-### Batch mode guarantees
-
-- output file is UTF-8 JSON Lines with `\n` line endings and no BOM
-- each ZIP produces exactly one JSON record line
-- records are appended one at a time by a single writer
-- discovery order is normalized by deterministic sorted path order in batch mode
-- one bad ZIP does not stop the batch unless `--fail-fast` is set
-- optional `--durable-jsonl` flushes and `fsync`s each line for stronger crash durability
-
-## Windows Sandbox block (Milestone 3B)
-
-Sandbox support is additive and opt-in.
-
-Generate hardened Windows Sandbox artifacts without launching the sandbox:
+Process all found remote ZIPs instead of only the first result:
 
 ```bash
-python -m start_here_extractor.cli suspicious.zip --output-dir out/extracted --report-dir out/reports --sandbox-platform windows-sandbox --sandbox-dry-run
+python -m start_here_extractor.cli --all --cloud-provider dropbox --cloud-access-token <TOKEN> --cloud-query "start here" --output-dir out/extracted --report-dir out/reports --jsonl-out out/reports/inventories.jsonl
 ```
 
-Common sandbox flags:
+Useful provider-specific flags:
 
-- `--sandbox-platform windows-sandbox`
-- `--sandbox-dry-run`
-- `--sandbox-timeout-seconds 120`
-- `--sandbox-root out/sandbox`
-- `--sandbox-command "Write-Host 'hello from sandbox'"`
-- `--sandbox-enable-network`
-- `--sandbox-enable-clipboard`
-- `--sandbox-enable-vgpu`
+- Google Drive
+  - `--cloud-drive-id <ID>`
+  - `--cloud-acknowledge-abuse`
+- Microsoft Graph
+  - `--graph-drive-scope me/drive/root`
+- Any provider
+  - `--cloud-folder-id <ID_OR_PATH>`
+  - `--cloud-page-size 100`
+  - `--cloud-max-pages 10`
+  - `--cloud-download-dir out/downloads`
 
-Default hardened Windows Sandbox settings in this block:
+## Windows Sandbox block
 
-- networking disabled
-- clipboard redirection disabled
-- vGPU disabled
-- staging folder mapped read-only
-- results folder mapped writable
-- `LogonCommand` points to a pre-staged PowerShell job script
+Sandbox support remains additive and opt-in.
 
-This block focuses on orchestration and dry-run validation. It does **not** claim full in-sandbox extraction and scanning yet.
+Dry-run generation:
+
+```bash
+python -m start_here_extractor.cli suspicious.zip --output-dir out/extracted --report-dir out/reports --sandbox-platform windows-sandbox --sandbox-dry-run --sandbox-root out/sandbox
+```
 
 ## Inventory output
 
@@ -154,8 +111,6 @@ These remain available for Milestone 1 and Milestone 2 consumers:
 
 ### Additive Milestone 3 fields
 
-These are additive only:
-
 - `run`
 - `provenance`
 - `zip_hardening`
@@ -172,37 +127,17 @@ Validate JSONL against the packaged schema:
 python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
 ```
 
-## Cloud locator scaffolding
+## Cloud modules in this block
 
-The Milestone 2 provider stubs remain under `src/start_here_extractor/cloud/`.
+- `src/start_here_extractor/cloud/http.py`
+- `src/start_here_extractor/cloud/runtime.py`
+- `src/start_here_extractor/cloud/gdrive.py`
+- `src/start_here_extractor/cloud/dropbox.py`
+- `src/start_here_extractor/cloud/graph.py`
 
-This Milestone 3A block does **not** turn them into live network integrations yet. It only adds the lower-level reliability and policy pieces they will use later.
-
-## New internal modules in this block
-
-- `src/start_here_extractor/sandbox/base.py`
-- `src/start_here_extractor/sandbox/windows.py`
-- `src/start_here_extractor/zip_hardening/strict_validator.py`
-- `src/start_here_extractor/policy.py`
-- `src/start_here_extractor/net/retry.py`
-- `src/start_here_extractor/io/jsonl_writer.py`
-
-## PowerShell helper
-
-The parity helper remains at `scripts/start_here_helper.ps1`.
-
-Examples:
-
-```powershell
-./scripts/start_here_helper.ps1 -ZipPath .\sample.zip -Mode Inspect
-./scripts/start_here_helper.ps1 -ZipPath .\sample.zip -Mode Extract -OutputDir .\out
-```
-
-The PowerShell helper is still focused on inspect/extract parity. It does not replace the Python batch JSONL pipeline.
+The earlier Milestone 2 stubs are still present for compatibility and comparison.
 
 ## Test suite
-
-Run the full suite:
 
 ```bash
 ruff check .
@@ -210,25 +145,21 @@ pytest
 python scripts/validate_inventory.py examples/sample_inventory_extracted.jsonl
 ```
 
-Milestone 3B adds tests for:
+Milestone 3C adds mocked tests for:
 
-- central-directory vs local-header mismatch detection
-- data descriptor ambiguity flags
-- duplicate name detection
-- retry/backoff honoring `Retry-After`
-- durable JSONL writer behavior
-- project-root-folder-name independence
-- hardened `.wsb` XML generation
-- sandbox dry-run artifact emission
-- sandbox policy + processor integration for suspicious ZIPs
+- Google Drive paging and download
+- Dropbox throttling / `Retry-After` handling and download
+- Microsoft Graph paging and content download
+- root-folder-name independence for remote downloads
 
 ## Safety posture
 
-Milestone 3B does not weaken earlier protections.
+Milestone 3C does not weaken earlier protections.
 
 - inspect first
 - bounded single-member extraction only
 - Zip Slip protections remain enforced
 - ZIP bomb size and ratio limits remain enforced
-- strict ZIP hardening is additive, not a replacement for the original limits
+- strict ZIP hardening remains additive
 - AV hooks remain advisory telemetry, not a primary gate
+- remote downloads stage to local temp files with atomic replacement

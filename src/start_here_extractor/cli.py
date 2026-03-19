@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import List
 
 from .batch import BatchConfig, run_batch
+from .cloud.base import provenance_for_candidate
+from .cloud.runtime import CloudRunConfig, build_locator, search_remote_candidates
 from .jsonl import append_jsonl
 from .locator import discover_zip_paths
 from .processor import process_zip
@@ -83,7 +85,49 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Enable vGPU in the sandbox config (default off)",
     )
+    parser.add_argument("--cloud-provider", choices=["gdrive", "dropbox", "graph"], default=None, help="Search and download ZIPs from a cloud provider instead of local paths/roots")
+    parser.add_argument("--cloud-access-token", default=None, help="Bearer token used for remote provider access")
+    parser.add_argument("--cloud-query", default="start here", help="Search text for remote ZIP discovery")
+    parser.add_argument("--cloud-folder-id", default=None, help="Optional provider-specific folder or root identifier")
+    parser.add_argument("--cloud-page-size", type=int, default=100, help="Remote search page size")
+    parser.add_argument("--cloud-max-pages", type=int, default=10, help="Maximum remote search pages to fetch")
+    parser.add_argument("--cloud-download-dir", default=None, help="Directory used to stage remote ZIP downloads")
+    parser.add_argument("--cloud-drive-id", default=None, help="Optional Google Drive shared drive identifier")
+    parser.add_argument("--cloud-acknowledge-abuse", action="store_true", help="Allow abusive-file acknowledgement for Google Drive downloads")
+    parser.add_argument("--graph-drive-scope", default="me/drive/root", help="Microsoft Graph drive scope, for example me/drive/root")
     return parser
+
+
+def _collect_local_zip_paths(args: argparse.Namespace) -> list[Path]:
+    return discover_zip_paths(args.paths, args.root, allow_symlink_traversal=args.allow_symlink_traversal)
+
+
+def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[tuple[Path, dict[str, object]]]:
+    cloud_cfg = CloudRunConfig(
+        provider=args.cloud_provider,
+        access_token=args.cloud_access_token,
+        query_text=args.cloud_query,
+        folder_id=args.cloud_folder_id,
+        page_size=args.cloud_page_size,
+        max_pages=args.cloud_max_pages,
+        drive_id=args.cloud_drive_id,
+        graph_drive_scope=args.graph_drive_scope,
+        acknowledge_abuse=bool(args.cloud_acknowledge_abuse),
+    )
+    locator = build_locator(cloud_cfg)
+    candidates = search_remote_candidates(locator, cloud_cfg)
+    if not candidates:
+        raise SystemExit("No remote ZIP files found from the provided cloud provider/query")
+    selected = candidates if args.all else candidates[:1]
+    download_root = Path(args.cloud_download_dir) if args.cloud_download_dir else output_dir / "_downloads" / args.cloud_provider
+    ensure_dir(download_root)
+    fetched_at = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
+    targets: list[tuple[Path, dict[str, object]]] = []
+    for candidate in selected:
+        local_path = Path(locator.download(candidate, str(download_root)))
+        provenance = provenance_for_candidate(candidate, local_path, fetched_at=fetched_at, source_path=None)
+        targets.append((local_path, provenance))
+    return targets
 
 
 def main(argv: List[str] | None = None) -> int:
@@ -127,15 +171,27 @@ def main(argv: List[str] | None = None) -> int:
         parser.error("--durable-jsonl is only valid with --all")
     if args.sandbox_dry_run and not args.sandbox_platform:
         parser.error("--sandbox-dry-run requires --sandbox-platform")
-
-    zip_paths = discover_zip_paths(args.paths, args.root, allow_symlink_traversal=args.allow_symlink_traversal)
-    if not zip_paths:
-        parser.error("No ZIP files found from the provided paths/roots")
+    if args.cloud_provider and (args.paths or args.root):
+        parser.error("Use either local paths/roots or --cloud-provider, not both")
+    if args.cloud_provider and not args.cloud_access_token:
+        parser.error("--cloud-access-token is required when --cloud-provider is used")
+    if not args.cloud_provider and not (args.paths or args.root):
+        parser.error("Provide local ZIP paths/roots or use --cloud-provider")
 
     output_dir = Path(args.output_dir)
     report_dir = Path(args.report_dir)
     ensure_dir(output_dir)
     ensure_dir(report_dir)
+
+    if args.cloud_provider:
+        targets = _collect_remote_targets(args, output_dir)
+        zip_paths = [path for path, _ in targets]
+        provenance_by_path = {str(path): prov for path, prov in targets}
+    else:
+        zip_paths = _collect_local_zip_paths(args)
+        provenance_by_path = {}
+    if not zip_paths:
+        parser.error("No ZIP files found from the provided inputs")
 
     if args.all:
         jsonl_out = Path(args.jsonl_out) if args.jsonl_out else report_dir / "inventories.jsonl"
@@ -151,6 +207,8 @@ def main(argv: List[str] | None = None) -> int:
                 output_root=output_dir,
                 process_one=process_zip,
             ):
+                if str(Path(result.zip_file.path)) in provenance_by_path:
+                    result.provenance = provenance_by_path[str(Path(result.zip_file.path))]
                 record = build_inventory_record(result.to_dict())
                 print(f"[{result.outcome}] {result.zip_file.path} -> {jsonl_out}")
                 if result.errors:
@@ -165,6 +223,8 @@ def main(argv: List[str] | None = None) -> int:
         per_zip_output_dir = output_dir / safe_slug(zip_path.stem)
         ensure_dir(per_zip_output_dir)
         result = process_zip(zip_path, per_zip_output_dir, limits, policy, settings)
+        if str(Path(result.zip_file.path)) in provenance_by_path:
+            result.provenance = provenance_by_path[str(Path(result.zip_file.path))]
         inventory_path = write_inventory(report_dir, zip_path, result.to_dict())
         print(f"[{result.outcome}] {zip_path} -> {inventory_path}")
         if result.outcome == "error":

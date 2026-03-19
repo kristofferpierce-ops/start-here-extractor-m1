@@ -24,9 +24,14 @@ src/start_here_extractor.egg-info/requires.txt
 src/start_here_extractor.egg-info/top_level.txt
 src/start_here_extractor/cloud/__init__.py
 src/start_here_extractor/cloud/base.py
+src/start_here_extractor/cloud/dropbox.py
 src/start_here_extractor/cloud/dropbox_stub.py
+src/start_here_extractor/cloud/gdrive.py
 src/start_here_extractor/cloud/gdrive_stub.py
+src/start_here_extractor/cloud/graph.py
 src/start_here_extractor/cloud/graph_stub.py
+src/start_here_extractor/cloud/http.py
+src/start_here_extractor/cloud/runtime.py
 src/start_here_extractor/io/__init__.py
 src/start_here_extractor/io/jsonl_writer.py
 src/start_here_extractor/net/__init__.py
@@ -42,3 +47,4 @@ tests/test_jsonl.py
 tests/test_milestone1.py
 tests/test_milestone3a.py
 tests/test_milestone3b.py
+tests/test_milestone3c.py
