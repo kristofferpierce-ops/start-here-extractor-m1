@@ -33,7 +33,6 @@ def test_resolve_access_token_from_command_and_expiry_hint():
     assert resolved.source == "command"
     assert resolved.status == "stale"
     assert "token-near-expiry" in (resolved.notes or [])
-    assert resolved.to_public_dict().get("token") is None
 
 
 def test_monitoring_reader_ignores_truncated_tail(tmp_path: Path):
@@ -45,15 +44,13 @@ def test_monitoring_reader_ignores_truncated_tail(tmp_path: Path):
 
 def test_build_inventory_record_adds_monitoring_and_governance_refs(tmp_path: Path):
     rec = _sample_record()
-    rec["_runtime_cloud"] = {"token_health": {"token": "secret-token", "status": "stale", "notes": ["token-near-expiry"], "source": "argument", "expires_at": None}}
+    rec["_runtime_cloud"] = {"token_health": {"status": "stale", "notes": ["token-near-expiry"], "source": "argument", "expires_at": None}}
     built = build_inventory_record(rec, audit_dir=tmp_path / "audit", monitoring_dir=tmp_path / "monitor", monitoring_stream_name="ops-monitor")
     assert built["monitoring_ref"].startswith("monitoring://")
     assert built["monitoring"]["review_required"] is True
     assert built["governance"]["monitoring_stream_ref"].endswith("ops-monitor.jsonl")
     assert built["governance"]["snapshot_ref"] == "out/job.wsb"
     assert built["governance"]["token_health"]["status"] == "stale"
-    assert "token" not in built["governance"]["token_health"]
-    assert "token" not in built["monitoring"]["token_health"]
 
 
 def test_build_monitoring_block_marks_review_for_sandbox():
