@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable, Mapping
 
+from .heuristics import highest_finding_severity
 from .types import PolicyDecision, StrictZipValidationResult
 
 SANDBOX_PREFIXES = (
@@ -54,3 +55,68 @@ def choose_policy_decision(
         return PolicyDecision(decision="warn", reason=all_flags[0], notes=all_flags)
 
     return PolicyDecision(decision="allow", reason="ok", notes=[])
+
+
+def derive_governance_policy(
+    *,
+    operational_policy: Mapping[str, object] | None,
+    heuristics_findings: list[dict] | None,
+    scan: Mapping[str, object] | None,
+    sandbox_available: bool,
+) -> dict:
+    heuristics_findings = heuristics_findings or []
+    operational_policy = operational_policy or {}
+    scan = scan or {}
+
+    current_decision = str(operational_policy.get("decision") or "allow")
+    current_reason = str(operational_policy.get("reason") or "ok")
+    notes = [str(item) for item in (operational_policy.get("notes") or [])]
+
+    if current_decision == "reject":
+        return {
+            "decision": "reject",
+            "reason": current_reason,
+            "notes": notes,
+            "contributors": ["operational-policy"],
+        }
+
+    severity = highest_finding_severity(heuristics_findings)
+    if severity in {"critical", "high"}:
+        decision = "sandbox" if sandbox_available else "reject"
+        return {
+            "decision": decision,
+            "reason": f"heuristics-{severity}",
+            "notes": [str(item.get("rule_id")) for item in heuristics_findings],
+            "contributors": ["heuristics"],
+        }
+    if severity == "medium":
+        return {
+            "decision": "warn",
+            "reason": "heuristics-medium",
+            "notes": [str(item.get("rule_id")) for item in heuristics_findings],
+            "contributors": ["heuristics"],
+        }
+
+    scan_status = str(scan.get("status") or "not-run")
+    if scan_status == "inconclusive":
+        return {
+            "decision": "warn",
+            "reason": "scan-inconclusive",
+            "notes": notes,
+            "contributors": ["scan"],
+        }
+
+    if current_decision in {"warn", "sandbox"}:
+        return {
+            "decision": current_decision,
+            "reason": current_reason,
+            "notes": notes,
+            "contributors": ["operational-policy"],
+        }
+
+    return {
+        "decision": "allow",
+        "reason": "ok",
+        "notes": [],
+        "contributors": ["summary"],
+    }

@@ -496,6 +496,240 @@
         "object",
         "null"
       ]
+    },
+    "summary": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "headline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "brief": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "heuristics_findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "rule_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "severity": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "score": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "evidence_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "excerpt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "policy_decision": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "decision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "contributors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "audit_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "retention_status": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "monitoring_ref": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "monitoring": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "status": {"type": ["string", "null"]},
+        "review_required": {"type": ["boolean", "null"]},
+        "review_reason": {"type": ["string", "null"]},
+        "emitted_at": {"type": ["string", "null"]}
+      }
+    },
+    "governance": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "evidence_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "approval_gate": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operator_approval_required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "operator_approval_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_stream_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retention": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "review_required": {"type": ["boolean", "null"]},
+        "review_reason": {"type": ["string", "null"]},
+        "monitoring_stream_ref": {"type": ["string", "null"]},
+        "snapshot_ref": {"type": ["string", "null"]},
+        "token_health": {"type": ["object", "null"]},
+        "monitoring_channels": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "additionalProperties": true

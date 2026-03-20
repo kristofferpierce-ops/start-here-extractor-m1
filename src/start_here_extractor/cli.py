@@ -6,6 +6,7 @@ from typing import List
 
 from .batch import BatchConfig, run_batch
 from .cloud.base import provenance_for_candidate
+from .cloud.auth import resolve_access_token
 from .cloud.runtime import CloudRunConfig, build_locator, search_remote_candidates
 from .jsonl import append_jsonl
 from .locator import discover_zip_paths
@@ -25,6 +26,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--jsonl-out", default=None, help="Append batch JSONL inventory records to this path")
     parser.add_argument("--fail-fast", action="store_true", help="Stop batch mode after the first ZIP with errors")
     parser.add_argument("--durable-jsonl", action="store_true", help="fsync JSONL output after each line in batch mode")
+    parser.add_argument("--audit-dir", default=None, help="Optional audit JSONL directory (defaults to <report-dir>/_audit)")
+    parser.add_argument("--durable-audit", action="store_true", help="fsync audit JSONL writes")
     parser.add_argument("--basename", action="append", default=["start here"], help="Allowed target basename alias")
     parser.add_argument("--allowed-ext", action="append", default=[".txt", ".md"], help="Allowed candidate extension")
     parser.add_argument("--prefer-ext", action="append", default=[".txt", ".md"], help="Preferred extension order")
@@ -94,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cloud-provider", choices=["gdrive", "dropbox", "graph"], default=None, help="Search and download ZIPs from a cloud provider instead of local paths/roots")
     parser.add_argument("--cloud-access-token", default=None, help="Bearer token used for remote provider access")
+    parser.add_argument("--cloud-access-token-command", default=None, help="Shell command that prints a bearer token on stdout")
+    parser.add_argument("--cloud-token-expires-at", default=None, help="Optional ISO timestamp hint for cloud access-token expiry")
+    parser.add_argument("--cloud-token-min-valid-seconds", type=int, default=300, help="Warn when the provided cloud token expires within this many seconds")
     parser.add_argument("--cloud-query", default="start here", help="Search text for remote ZIP discovery")
     parser.add_argument("--cloud-folder-id", default=None, help="Optional provider-specific folder or root identifier")
     parser.add_argument("--cloud-page-size", type=int, default=100, help="Remote search page size")
@@ -101,6 +107,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cloud-download-dir", default=None, help="Directory used to stage remote ZIP downloads")
     parser.add_argument("--cloud-drive-id", default=None, help="Optional Google Drive shared drive identifier")
     parser.add_argument("--cloud-acknowledge-abuse", action="store_true", help="Allow abusive-file acknowledgement for Google Drive downloads")
+    parser.add_argument("--cloud-operator-approval-ref", default=None, help="Operator approval reference required for abuse-gated cloud downloads")
+    parser.add_argument(
+        "--cloud-require-operator-approval-for-abuse",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require an operator approval reference when acknowledgeAbuse is used",
+    )
+    parser.add_argument("--retention-days", type=int, default=30, help="Retention window in days for governance metadata")
+    parser.add_argument("--legal-hold", action="store_true", help="Mark records as legal hold for retention governance")
+    parser.add_argument("--audit-stream-name", default="audit-events", help="Audit JSONL stream name without extension")
+    parser.add_argument("--monitoring-dir", default=None, help="Optional monitoring JSONL directory (defaults to <report-dir>/_monitoring)")
+    parser.add_argument("--durable-monitoring", action="store_true", help="fsync monitoring JSONL writes")
+    parser.add_argument("--monitoring-stream-name", default="monitoring-events", help="Monitoring JSONL stream name without extension")
     parser.add_argument("--graph-drive-scope", default="me/drive/root", help="Microsoft Graph drive scope, for example me/drive/root")
     return parser
 
@@ -109,10 +128,16 @@ def _collect_local_zip_paths(args: argparse.Namespace) -> list[Path]:
     return discover_zip_paths(args.paths, args.root, allow_symlink_traversal=args.allow_symlink_traversal)
 
 
-def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[tuple[Path, dict[str, object]]]:
+def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[tuple[Path, dict[str, object], dict[str, object]]]:
+    resolved_token = resolve_access_token(
+        access_token=args.cloud_access_token,
+        access_token_command=args.cloud_access_token_command,
+        expires_at=args.cloud_token_expires_at,
+        min_valid_seconds=args.cloud_token_min_valid_seconds,
+    )
     cloud_cfg = CloudRunConfig(
         provider=args.cloud_provider,
-        access_token=args.cloud_access_token,
+        access_token=resolved_token.token,
         query_text=args.cloud_query,
         folder_id=args.cloud_folder_id,
         page_size=args.cloud_page_size,
@@ -120,6 +145,8 @@ def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[
         drive_id=args.cloud_drive_id,
         graph_drive_scope=args.graph_drive_scope,
         acknowledge_abuse=bool(args.cloud_acknowledge_abuse),
+        operator_approval_ref=args.cloud_operator_approval_ref,
+        require_operator_approval_for_abuse=bool(args.cloud_require_operator_approval_for_abuse),
     )
     locator = build_locator(cloud_cfg)
     candidates = search_remote_candidates(locator, cloud_cfg)
@@ -129,11 +156,12 @@ def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[
     download_root = Path(args.cloud_download_dir) if args.cloud_download_dir else output_dir / "_downloads" / args.cloud_provider
     ensure_dir(download_root)
     fetched_at = __import__('datetime').datetime.now(__import__('datetime').timezone.utc).isoformat()
-    targets: list[tuple[Path, dict[str, object]]] = []
+    targets: list[tuple[Path, dict[str, object], dict[str, object]]] = []
     for candidate in selected:
         local_path = Path(locator.download(candidate, str(download_root)))
         provenance = provenance_for_candidate(candidate, local_path, fetched_at=fetched_at, source_path=None)
-        targets.append((local_path, provenance))
+        runtime_cloud = {"token_health": resolved_token.to_public_dict()}
+        targets.append((local_path, provenance, runtime_cloud))
     return targets
 
 
@@ -175,6 +203,14 @@ def main(argv: List[str] | None = None) -> int:
         sandbox_network_enabled=bool(args.sandbox_enable_network),
         sandbox_clipboard_enabled=bool(args.sandbox_enable_clipboard),
         sandbox_vgpu_enabled=bool(args.sandbox_enable_vgpu),
+        retention_days=args.retention_days,
+        legal_hold=bool(args.legal_hold),
+        audit_stream_name=args.audit_stream_name,
+        monitoring_stream_name=args.monitoring_stream_name,
+        durable_monitoring=bool(args.durable_monitoring),
+        cloud_acknowledge_abuse=bool(args.cloud_acknowledge_abuse),
+        cloud_operator_approval_ref=args.cloud_operator_approval_ref,
+        cloud_require_operator_approval_for_abuse=bool(args.cloud_require_operator_approval_for_abuse),
     )
 
     if not args.all and args.fail_fast:
@@ -191,8 +227,8 @@ def main(argv: List[str] | None = None) -> int:
         parser.error("--yara-compiled-rules requires --yara-allow-compiled-rules")
     if args.cloud_provider and (args.paths or args.root):
         parser.error("Use either local paths/roots or --cloud-provider, not both")
-    if args.cloud_provider and not args.cloud_access_token:
-        parser.error("--cloud-access-token is required when --cloud-provider is used")
+    if args.cloud_provider and not (args.cloud_access_token or args.cloud_access_token_command):
+        parser.error("--cloud-access-token or --cloud-access-token-command is required when --cloud-provider is used")
     if not args.cloud_provider and not (args.paths or args.root):
         parser.error("Provide local ZIP paths/roots or use --cloud-provider")
 
@@ -203,11 +239,13 @@ def main(argv: List[str] | None = None) -> int:
 
     if args.cloud_provider:
         targets = _collect_remote_targets(args, output_dir)
-        zip_paths = [path for path, _ in targets]
-        provenance_by_path = {str(path): prov for path, prov in targets}
+        zip_paths = [path for path, _, _ in targets]
+        provenance_by_path = {str(path): prov for path, prov, _ in targets}
+        runtime_cloud_by_path = {str(path): runtime for path, _, runtime in targets}
     else:
         zip_paths = _collect_local_zip_paths(args)
         provenance_by_path = {}
+        runtime_cloud_by_path = {}
     if not zip_paths:
         parser.error("No ZIP files found from the provided inputs")
 
@@ -227,7 +265,11 @@ def main(argv: List[str] | None = None) -> int:
             ):
                 if str(Path(result.zip_file.path)) in provenance_by_path:
                     result.provenance = provenance_by_path[str(Path(result.zip_file.path))]
-                record = build_inventory_record(result.to_dict())
+                audit_dir = Path(args.audit_dir) if args.audit_dir else report_dir / "_audit"
+                payload = result.to_dict()
+                if str(Path(result.zip_file.path)) in runtime_cloud_by_path:
+                    payload["_runtime_cloud"] = runtime_cloud_by_path[str(Path(result.zip_file.path))]
+                record = build_inventory_record(payload, audit_dir=audit_dir, durable_audit=bool(args.durable_audit or args.durable_jsonl), audit_stream_name=args.audit_stream_name, monitoring_dir=Path(args.monitoring_dir) if args.monitoring_dir else report_dir / "_monitoring", durable_monitoring=bool(args.durable_monitoring or args.durable_jsonl), monitoring_stream_name=args.monitoring_stream_name)
                 print(f"[{result.outcome}] {result.zip_file.path} -> {jsonl_out}")
                 if result.errors:
                     state["had_error"] = True
@@ -241,9 +283,13 @@ def main(argv: List[str] | None = None) -> int:
         per_zip_output_dir = output_dir / safe_slug(zip_path.stem)
         ensure_dir(per_zip_output_dir)
         result = process_zip(zip_path, per_zip_output_dir, limits, policy, settings)
+        payload = result.to_dict()
         if str(Path(result.zip_file.path)) in provenance_by_path:
             result.provenance = provenance_by_path[str(Path(result.zip_file.path))]
-        inventory_path = write_inventory(report_dir, zip_path, result.to_dict())
+            payload["provenance"] = result.provenance
+        if str(Path(result.zip_file.path)) in runtime_cloud_by_path:
+            payload["_runtime_cloud"] = runtime_cloud_by_path[str(Path(result.zip_file.path))]
+        inventory_path = write_inventory(report_dir, zip_path, payload, durable_audit=bool(args.durable_audit), audit_stream_name=args.audit_stream_name, monitoring_dir=Path(args.monitoring_dir) if args.monitoring_dir else report_dir / "_monitoring", durable_monitoring=bool(args.durable_monitoring), monitoring_stream_name=args.monitoring_stream_name)
         print(f"[{result.outcome}] {zip_path} -> {inventory_path}")
         if result.outcome == "error":
             had_error = True

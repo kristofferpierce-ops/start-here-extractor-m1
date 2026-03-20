@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 from urllib.parse import urlencode
 
-from ..errors import RemoteProviderError
+from ..errors import OperatorApprovalRequiredError, RemoteProviderError
 from ..types import RetryPolicy
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate, decode_download_hint, encode_download_hint
 from .http import Requestor, atomic_download, request_json, urllib_requestor
@@ -19,6 +19,8 @@ class GoogleDriveAuthConfig:
     include_items_from_all_drives: bool = True
     acknowledge_abuse: bool = False
     timeout_seconds: float = 30.0
+    operator_approval_ref: str | None = None
+    require_operator_approval_for_abuse: bool = True
 
 
 class GoogleDriveLocator(RemoteLocator):
@@ -70,6 +72,8 @@ class GoogleDriveLocator(RemoteLocator):
             hint = encode_download_hint({
                 'can_download': bool(((item.get('capabilities') or {}) if isinstance(item.get('capabilities'), dict) else {}).get('canDownload', True)),
                 'md5': item.get('md5Checksum'),
+                'abuse_acknowledge_requested': bool(self._auth.acknowledge_abuse),
+                'operator_approval_ref': self._auth.operator_approval_ref,
             })
             candidates.append(
                 RemoteZipCandidate(
@@ -91,6 +95,8 @@ class GoogleDriveLocator(RemoteLocator):
         hint = decode_download_hint(candidate.download_hint)
         if hint.get('can_download') is False:
             raise RemoteProviderError('gdrive-canDownload-false')
+        if self._auth.acknowledge_abuse and self._auth.require_operator_approval_for_abuse and not self._auth.operator_approval_ref:
+            raise OperatorApprovalRequiredError('gdrive-abuse-download-requires-operator-approval')
         params = {'alt': 'media'}
         if self._auth.acknowledge_abuse:
             params['acknowledgeAbuse'] = 'true'

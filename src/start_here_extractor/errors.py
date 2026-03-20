@@ -56,3 +56,11 @@ class RemoteRateLimitError(RetryableOperationError):
         super().__init__(message, retry_after_seconds=retry_after_seconds)
         self.status_code = status_code
         self.headers = headers or {}
+
+
+class OperatorApprovalRequiredError(StartHereError):
+    pass
+
+
+class TokenResolutionError(StartHereError):
+    pass

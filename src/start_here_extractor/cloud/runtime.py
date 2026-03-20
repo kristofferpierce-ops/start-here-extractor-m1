@@ -18,6 +18,8 @@ class CloudRunConfig:
     drive_id: str | None = None
     graph_drive_scope: str = 'me/drive/root'
     acknowledge_abuse: bool = False
+    operator_approval_ref: str | None = None
+    require_operator_approval_for_abuse: bool = True
 
 
 def build_locator(config: CloudRunConfig) -> RemoteLocator:
@@ -27,6 +29,8 @@ def build_locator(config: CloudRunConfig) -> RemoteLocator:
                 access_token=config.access_token,
                 drive_id=config.drive_id,
                 acknowledge_abuse=config.acknowledge_abuse,
+                operator_approval_ref=config.operator_approval_ref,
+                require_operator_approval_for_abuse=config.require_operator_approval_for_abuse,
             )
         )
     if config.provider == 'dropbox':

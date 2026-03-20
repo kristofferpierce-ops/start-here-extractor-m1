@@ -44,6 +44,14 @@ class ExtractSettings:
     sandbox_network_enabled: bool = False
     sandbox_clipboard_enabled: bool = False
     sandbox_vgpu_enabled: bool = False
+    retention_days: int = 30
+    legal_hold: bool = False
+    audit_stream_name: str = "audit-events"
+    monitoring_stream_name: str = "monitoring-events"
+    durable_monitoring: bool = False
+    cloud_acknowledge_abuse: bool = False
+    cloud_operator_approval_ref: Optional[str] = None
+    cloud_require_operator_approval_for_abuse: bool = True
 
 
 @dataclass(slots=True)
@@ -102,6 +110,14 @@ class ProcessResult:
     zip_hardening: Optional[Dict[str, Any]] = None
     policy: Optional[Dict[str, Any]] = None
     batch: Optional[Dict[str, Any]] = None
+    summary: Optional[Dict[str, Any]] = None
+    heuristics_findings: List[Dict[str, Any]] = field(default_factory=list)
+    policy_decision: Optional[Dict[str, Any]] = None
+    audit_ref: Optional[str] = None
+    retention_status: Optional[str] = None
+    governance: Optional[Dict[str, Any]] = None
+    monitoring: Optional[Dict[str, Any]] = None
+    monitoring_ref: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
