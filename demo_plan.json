@@ -1,0 +1,7 @@
+{
+  "plan_id": "demo-plan",
+  "actions": [
+    {"id": "a1", "type": "write-file", "params": {"path": "notes/result.txt", "content": "hello"}},
+    {"id": "a2", "type": "touch-marker", "params": {"path": "markers/done.txt"}}
+  ]
+}

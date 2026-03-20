@@ -660,10 +660,30 @@
       ],
       "additionalProperties": true,
       "properties": {
-        "status": {"type": ["string", "null"]},
-        "review_required": {"type": ["boolean", "null"]},
-        "review_reason": {"type": ["string", "null"]},
-        "emitted_at": {"type": ["string", "null"]}
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "review_required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "review_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "emitted_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "governance": {
@@ -715,11 +735,36 @@
             "null"
           ]
         },
-        "review_required": {"type": ["boolean", "null"]},
-        "review_reason": {"type": ["string", "null"]},
-        "monitoring_stream_ref": {"type": ["string", "null"]},
-        "snapshot_ref": {"type": ["string", "null"]},
-        "token_health": {"type": ["object", "null"]},
+        "review_required": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "review_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "monitoring_stream_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snapshot_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "token_health": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
         "monitoring_channels": {
           "type": [
             "array",
@@ -730,6 +775,21 @@
           }
         }
       }
+    },
+    "playbook_actions": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "action_audit_refs": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "authorization_decision": {
+      "type": "object"
     }
   },
   "additionalProperties": true

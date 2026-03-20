@@ -64,3 +64,11 @@ class OperatorApprovalRequiredError(StartHereError):
 
 class TokenResolutionError(StartHereError):
     pass
+
+
+class AuthorizationError(StartHereError):
+    pass
+
+
+class ActionExecutionError(StartHereError):
+    pass

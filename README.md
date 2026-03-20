@@ -253,3 +253,43 @@ This stage adds future-safe governance hooks without narrowing the project into 
 ## Milestone 4D closeout
 
 This release hardens governance and monitoring by removing raw cloud tokens from persisted records, preserving only non-secret token-health metadata, and adding a monitoring rollup helper for operational summaries.
+
+
+## Milestone 5A: playbook engine, RBAC, and immutable action audit
+
+This build adds a deterministic remediation playbook subsystem that keeps the existing extractor pipeline intact.
+
+### New package entrypoint
+
+```bash
+start-here-playbook path/to/plan.json --workspace-root ./workspace --audit-dir ./out/audit --actor-id analyst-1 --role operator --dry-run
+```
+
+### Plan shape
+
+A plan can be either a JSON list of actions or an object containing `plan_id` and `actions`.
+
+Example:
+
+```json
+{
+  "plan_id": "demo-plan",
+  "actions": [
+    {"id": "a1", "type": "write-file", "params": {"path": "notes/result.txt", "content": "hello"}},
+    {"id": "a2", "type": "touch-marker", "params": {"path": "markers/complete.txt"}}
+  ]
+}
+```
+
+### Built-in actions
+- `write-file`
+- `delete-path`
+- `touch-marker`
+
+### Role defaults
+- `viewer`: no playbook execution
+- `analyst`: `playbook.run.dry_run`
+- `operator`: `playbook.run`, `playbook.run.dry_run`
+- `admin`: operator rights plus configure / override placeholders
+
+All playbook actions are written to an append-only action audit stream with idempotency keys so reruns can safely skip already completed actions.
