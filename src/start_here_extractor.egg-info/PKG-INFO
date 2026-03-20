@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: start-here-extractor
-Version: 0.6.1
+Version: 0.7.2
 Summary: Inspect-first, extract-minimally ZIP START HERE extractor
 Author: OpenAI for user deliverable
 License: Proprietary / user project
@@ -235,3 +235,29 @@ Milestone 3E does not weaken earlier protections.
 - strict ZIP validation
 - policy-based sandbox escalation
 - additive-only schema evolution
+
+
+## Milestone 4A
+
+This block begins a generic evidence-governance layer on top of the extractor:
+- deterministic summary generation from inventory plus bounded preview only
+- dangerous-instruction heuristics
+- additive governance policy decisions
+- append-only audit JSONL with audit refs
+- retention status defaults
+
+The existing `policy` field remains the operational extractor decision. The additive `policy_decision` field is a future-safe governance artifact designed to generalize later beyond ZIP files to other company evidence streams.
+
+
+## Milestone 4B governance hardening
+
+This stage adds future-safe governance hooks without narrowing the project into a telephony-only bridge. Cloud abuse acknowledgement is now gated behind an explicit operator approval reference when required, retention status is computed deterministically, audit JSONL streams can be resumed safely, and inventory records now carry a generic `governance` block designed to coexist later with jobs, invoices, labor, expenses, and purchasing evidence.
+
+
+## Milestone 4C additions
+
+- optional `--cloud-access-token-command` for runtime token resolution
+- token health hints via `--cloud-token-expires-at` and `--cloud-token-min-valid-seconds`
+- monitoring JSONL stream and `monitoring_ref` in inventory records
+- governance review hooks for sandbox and cloud provider states
+- no assumptions about the outer project root folder name

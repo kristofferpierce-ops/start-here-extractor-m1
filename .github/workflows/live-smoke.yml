@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       provider:
-        description: Cloud provider
+        description: Cloud provider to smoke test
         required: true
         type: choice
         options:
@@ -12,27 +12,22 @@ on:
           - dropbox
           - graph
       query:
-        description: Search query
+        description: Query string used to find the remote ZIP
         required: true
         default: drive_smoke_test
-        type: string
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install
-        run: python -m pip install -e .[dev]
+      - name: Install package and dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
 
       - name: Resolve provider token
         id: token
