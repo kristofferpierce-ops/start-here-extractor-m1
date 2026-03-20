@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from .security import redact_sensitive_fields
+
 
 def build_governance_block(record: dict, *, operator_approval_ref: str | None, require_operator_approval_for_abuse: bool, acknowledge_abuse: bool, audit_stream_ref: str | None, retention: dict | None, monitoring_stream_ref: str | None = None, token_health: dict | None = None) -> Dict[str, Any]:
     source_type = None
@@ -24,7 +26,7 @@ def build_governance_block(record: dict, *, operator_approval_ref: str | None, r
         "audit_stream_ref": audit_stream_ref,
         "monitoring_stream_ref": monitoring_stream_ref,
         "retention": retention,
-        "token_health": token_health,
+        "token_health": redact_sensitive_fields(token_health) if token_health else None,
         "snapshot_ref": sandbox.get("config_path") or sandbox.get("artifacts_dir"),
         "monitoring_channels": ["inventory-jsonl", "audit-jsonl", "monitoring-jsonl"],
     }

@@ -13,6 +13,7 @@ src/start_here_extractor/inspector.py
 src/start_here_extractor/jsonl.py
 src/start_here_extractor/locator.py
 src/start_here_extractor/matcher.py
+src/start_here_extractor/metrics.py
 src/start_here_extractor/monitoring.py
 src/start_here_extractor/policy.py
 src/start_here_extractor/processor.py
@@ -20,6 +21,7 @@ src/start_here_extractor/reader.py
 src/start_here_extractor/reporter.py
 src/start_here_extractor/retention.py
 src/start_here_extractor/scan.py
+src/start_here_extractor/security.py
 src/start_here_extractor/summary.py
 src/start_here_extractor/types.py
 src/start_here_extractor/utils.py
@@ -60,3 +62,4 @@ tests/test_milestone3d.py
 tests/test_milestone4a.py
 tests/test_milestone4b.py
 tests/test_milestone4c.py
+tests/test_milestone4d.py

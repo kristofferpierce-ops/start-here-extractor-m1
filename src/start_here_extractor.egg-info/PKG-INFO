@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: start-here-extractor
-Version: 0.7.2
+Version: 0.8.0
 Summary: Inspect-first, extract-minimally ZIP START HERE extractor
 Author: OpenAI for user deliverable
 License: Proprietary / user project
@@ -261,3 +261,8 @@ This stage adds future-safe governance hooks without narrowing the project into 
 - monitoring JSONL stream and `monitoring_ref` in inventory records
 - governance review hooks for sandbox and cloud provider states
 - no assumptions about the outer project root folder name
+
+
+## Milestone 4D closeout
+
+This release hardens governance and monitoring by removing raw cloud tokens from persisted records, preserving only non-secret token-health metadata, and adding a monitoring rollup helper for operational summaries.

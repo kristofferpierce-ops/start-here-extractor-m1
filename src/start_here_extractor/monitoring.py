@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .io.jsonl_writer import JsonlWriter
+from .security import redact_sensitive_fields
 
 
 def utcnow_iso() -> str:
@@ -40,6 +41,7 @@ def build_monitoring_block(record: dict, *, token_health: dict | None = None) ->
 
     block = {
         "status": "active",
+        "severity": ("high" if policy_decision.get("decision") == "reject" else "medium" if review_required else "low"),
         "review_required": review_required,
         "review_reason": policy_decision.get("reason") or operational_policy.get("reason"),
         "provider_state": provider_state,
@@ -53,7 +55,7 @@ def build_monitoring_block(record: dict, *, token_health: dict | None = None) ->
             "status": scan.get("status"),
             "engine": scan.get("engine"),
         },
-        "token_health": token_health,
+        "token_health": redact_sensitive_fields(token_health) if token_health else None,
         "emitted_at": utcnow_iso(),
     }
     return block

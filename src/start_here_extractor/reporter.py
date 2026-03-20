@@ -11,19 +11,12 @@ from .heuristics import detect_dangerous_instructions
 from .monitoring import build_monitoring_block, monitoring_append
 from .policy import derive_governance_policy
 from .retention import derive_retention_decision
+from .security import redact_sensitive_fields
 from .summary import summarize_inventory_preview
 from .utils import ensure_dir, safe_slug
 
 
 SCHEMA_VERSION = "4.2"
-
-
-def _sanitize_token_health(token_health: object) -> dict | None:
-    if not isinstance(token_health, dict):
-        return None
-    cleaned = dict(token_health)
-    cleaned.pop("token", None)
-    return cleaned
 
 
 def utcnow_iso() -> str:
@@ -73,7 +66,9 @@ def build_inventory_record(
         for note in [policy.get("reason"), *(policy.get("notes") or [])]:
             if note and note not in warnings:
                 warnings.append(str(note))
-    token_health = _sanitize_token_health(runtime_cloud.get("token_health")) if isinstance(runtime_cloud, dict) else None
+    token_health = runtime_cloud.get("token_health") if isinstance(runtime_cloud, dict) else None
+    if isinstance(token_health, dict):
+        token_health = redact_sensitive_fields(token_health)
     if isinstance(token_health, dict):
         for note in token_health.get("notes") or []:
             if note not in warnings:
@@ -170,7 +165,7 @@ def build_inventory_record(
         )
     else:
         record.setdefault("monitoring_ref", None)
-    return record
+    return redact_sensitive_fields(record)
 
 
 def write_inventory(
