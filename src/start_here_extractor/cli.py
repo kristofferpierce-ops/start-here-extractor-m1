@@ -6,7 +6,7 @@ from typing import List
 
 from .batch import BatchConfig, run_batch
 from .cloud.base import provenance_for_candidate
-from .cloud.auth import resolve_access_token
+from .cloud.auth import build_access_token_provider
 from .cloud.runtime import CloudRunConfig, build_locator, search_remote_candidates
 from .jsonl import append_jsonl
 from .locator import discover_zip_paths
@@ -129,15 +129,17 @@ def _collect_local_zip_paths(args: argparse.Namespace) -> list[Path]:
 
 
 def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[tuple[Path, dict[str, object], dict[str, object]]]:
-    resolved_token = resolve_access_token(
+    token_provider = build_access_token_provider(
         access_token=args.cloud_access_token,
         access_token_command=args.cloud_access_token_command,
         expires_at=args.cloud_token_expires_at,
         min_valid_seconds=args.cloud_token_min_valid_seconds,
     )
+    token_provider.get_token()
     cloud_cfg = CloudRunConfig(
         provider=args.cloud_provider,
-        access_token=resolved_token.token,
+        access_token=None,
+        access_token_provider=token_provider,
         query_text=args.cloud_query,
         folder_id=args.cloud_folder_id,
         page_size=args.cloud_page_size,
@@ -160,7 +162,7 @@ def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[
     for candidate in selected:
         local_path = Path(locator.download(candidate, str(download_root)))
         provenance = provenance_for_candidate(candidate, local_path, fetched_at=fetched_at, source_path=None)
-        runtime_cloud = {"token_health": resolved_token.to_public_dict()}
+        runtime_cloud = {"token_health": token_provider.public_state()}
         targets.append((local_path, provenance, runtime_cloud))
     return targets
 

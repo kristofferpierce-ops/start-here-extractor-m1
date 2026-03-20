@@ -7,6 +7,7 @@ from urllib.parse import urlencode
 
 from ..errors import OperatorApprovalRequiredError, RemoteProviderError
 from ..types import RetryPolicy
+from .auth import AccessTokenProvider, run_with_auth_retry
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate, decode_download_hint, encode_download_hint
 from .http import Requestor, atomic_download, request_json, urllib_requestor
 
@@ -14,6 +15,7 @@ from .http import Requestor, atomic_download, request_json, urllib_requestor
 @dataclass(frozen=True)
 class GoogleDriveAuthConfig:
     access_token: str
+    access_token_provider: AccessTokenProvider | None = None
     drive_id: str | None = None
     supports_all_drives: bool = True
     include_items_from_all_drives: bool = True
@@ -32,7 +34,8 @@ class GoogleDriveLocator(RemoteLocator):
         self._retry_policy = retry_policy
 
     def _auth_headers(self) -> dict[str, str]:
-        return {'Authorization': f'Bearer {self._auth.access_token}'}
+        token = self._auth.access_token_provider.get_token() if self._auth.access_token_provider else self._auth.access_token
+        return {'Authorization': f'Bearer {token}'}
 
     def _query_string(self, query: RemoteSearchQuery, page_size: int, page_token: Optional[str]) -> str:
         parts = ["trashed=false", "mimeType='application/zip'"]
@@ -58,7 +61,10 @@ class GoogleDriveLocator(RemoteLocator):
 
     def search(self, query: RemoteSearchQuery, *, page_token: Optional[str] = None, page_size: int = 100) -> tuple[list[RemoteZipCandidate], Optional[str]]:
         url = 'https://www.googleapis.com/drive/v3/files?' + self._query_string(query, page_size, page_token)
-        payload = request_json('GET', url, headers=self._auth_headers(), timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy)
+        payload = run_with_auth_retry(
+            lambda: request_json('GET', url, headers=self._auth_headers(), timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
+            self._auth.access_token_provider,
+        )
         items = payload.get('files', [])
         if not isinstance(items, list):
             raise RemoteProviderError('gdrive-files-not-a-list')
@@ -102,4 +108,7 @@ class GoogleDriveLocator(RemoteLocator):
             params['acknowledgeAbuse'] = 'true'
         url = f'https://www.googleapis.com/drive/v3/files/{candidate.id}?' + urlencode(params)
         dest_path = Path(dest_dir) / candidate.name
-        return atomic_download('GET', url, headers=self._auth_headers(), dest_path=dest_path, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy)
+        return run_with_auth_retry(
+            lambda: atomic_download('GET', url, headers=self._auth_headers(), dest_path=dest_path, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
+            self._auth.access_token_provider,
+        )

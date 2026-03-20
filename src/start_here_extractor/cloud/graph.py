@@ -7,6 +7,7 @@ from urllib.parse import quote
 
 from ..errors import RemoteProviderError
 from ..types import RetryPolicy
+from .auth import AccessTokenProvider, run_with_auth_retry
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate, decode_download_hint, encode_download_hint
 from .http import Requestor, atomic_download, request_json, urllib_requestor
 
@@ -14,6 +15,7 @@ from .http import Requestor, atomic_download, request_json, urllib_requestor
 @dataclass(frozen=True)
 class MicrosoftGraphAuthConfig:
     access_token: str
+    access_token_provider: AccessTokenProvider | None = None
     drive_scope: str = 'me/drive/root'
     timeout_seconds: float = 30.0
 
@@ -27,7 +29,8 @@ class MicrosoftGraphLocator(RemoteLocator):
         self._retry_policy = retry_policy
 
     def _auth_headers(self) -> dict[str, str]:
-        return {'Authorization': f'Bearer {self._auth.access_token}'}
+        token = self._auth.access_token_provider.get_token() if self._auth.access_token_provider else self._auth.access_token
+        return {'Authorization': f'Bearer {token}'}
 
     def search(self, query: RemoteSearchQuery, *, page_token: Optional[str] = None, page_size: int = 100) -> tuple[list[RemoteZipCandidate], Optional[str]]:
         if page_token:
@@ -35,7 +38,10 @@ class MicrosoftGraphLocator(RemoteLocator):
         else:
             text = quote(query.text or '', safe='')
             url = f"https://graph.microsoft.com/v1.0/{self._auth.drive_scope}/search(q='{text}')?$top={page_size}"
-        payload = request_json('GET', url, headers=self._auth_headers(), timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy)
+        payload = run_with_auth_retry(
+            lambda: request_json('GET', url, headers=self._auth_headers(), timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
+            self._auth.access_token_provider,
+        )
         items = payload.get('value', [])
         if not isinstance(items, list):
             raise RemoteProviderError('graph-value-not-a-list')
@@ -76,4 +82,7 @@ class MicrosoftGraphLocator(RemoteLocator):
         else:
             url = f'https://graph.microsoft.com/v1.0/{self._auth.drive_scope}/items/{item_id}/content'
         dest_path = Path(dest_dir) / candidate.name
-        return atomic_download('GET', url, headers=self._auth_headers(), dest_path=dest_path, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy)
+        return run_with_auth_retry(
+            lambda: atomic_download('GET', url, headers=self._auth_headers(), dest_path=dest_path, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
+            self._auth.access_token_provider,
+        )

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+from .auth import AccessTokenProvider
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate
 from .dropbox import DropboxAuthConfig, DropboxLocator
 from .gdrive import GoogleDriveAuthConfig, GoogleDriveLocator
@@ -10,7 +12,8 @@ from .graph import MicrosoftGraphAuthConfig, MicrosoftGraphLocator
 @dataclass(frozen=True)
 class CloudRunConfig:
     provider: str
-    access_token: str
+    access_token: str | None = None
+    access_token_provider: AccessTokenProvider | None = None
     query_text: str = 'start here'
     folder_id: str | None = None
     page_size: int = 100
@@ -26,7 +29,8 @@ def build_locator(config: CloudRunConfig) -> RemoteLocator:
     if config.provider == 'gdrive':
         return GoogleDriveLocator(
             GoogleDriveAuthConfig(
-                access_token=config.access_token,
+                access_token=config.access_token or '',
+                access_token_provider=config.access_token_provider,
                 drive_id=config.drive_id,
                 acknowledge_abuse=config.acknowledge_abuse,
                 operator_approval_ref=config.operator_approval_ref,
@@ -34,11 +38,12 @@ def build_locator(config: CloudRunConfig) -> RemoteLocator:
             )
         )
     if config.provider == 'dropbox':
-        return DropboxLocator(DropboxAuthConfig(access_token=config.access_token))
+        return DropboxLocator(DropboxAuthConfig(access_token=config.access_token or '', access_token_provider=config.access_token_provider))
     if config.provider == 'graph':
         return MicrosoftGraphLocator(
             MicrosoftGraphAuthConfig(
-                access_token=config.access_token,
+                access_token=config.access_token or '',
+                access_token_provider=config.access_token_provider,
                 drive_scope=config.graph_drive_scope,
             )
         )
