@@ -249,6 +249,21 @@ PY
           echo "gate_exit_code=$GATE_EXIT_CODE" >> "$GITHUB_OUTPUT"
           cat ./out/live_smoke_matrix_summary.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build release promotion decision
+        id: release_decision
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          python ./scripts/live_smoke_release_gate.py \
+            --matrix-summary ./out/live_smoke_matrix_summary.json \
+            --out-dir ./out \
+            --runbook-path ./LIVE_SMOKE_OPERATOR_RUNBOOK.md
+          RELEASE_DECISION_EXIT_CODE=$?
+          set -e
+          echo "release_decision_exit_code=$RELEASE_DECISION_EXIT_CODE" >> "$GITHUB_OUTPUT"
+          cat ./out/live_smoke_release_gate.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: List gate outputs
         if: always()
         shell: bash
@@ -262,11 +277,23 @@ PY
         uses: actions/upload-artifact@v4
         with:
           name: live-smoke-gate
-          path: out/
+          path: |
+            out/
+            LIVE_SMOKE_OPERATOR_RUNBOOK.md
 
       - name: Enforce release gate
         if: always()
         shell: bash
         run: |
           set -euo pipefail
-          test "${{ steps.gate.outputs.gate_exit_code || '1' }}" = "0"
+          python - <<'PY'
+import json
+from pathlib import Path
+
+matrix_summary = json.loads(Path("./out/live_smoke_matrix_summary.json").read_text(encoding="utf-8"))
+release_decision = json.loads(Path("./out/live_smoke_release_gate.json").read_text(encoding="utf-8"))
+print(f"Matrix gate passed: {matrix_summary['gate_passed']}")
+print(f"Promotion decision: {release_decision['decision']}")
+if not release_decision.get("promote"):
+    raise SystemExit(1)
+PY

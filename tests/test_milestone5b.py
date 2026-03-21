@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.live_smoke_matrix import main as live_smoke_matrix_main
+from scripts.live_smoke_release_gate import main as live_smoke_release_gate_main
 from scripts.live_smoke_summary import main as live_smoke_summary_main
 from start_here_extractor.cloud.auth import build_access_token_provider, resolve_access_token
 from start_here_extractor.cloud.base import RemoteSearchQuery
@@ -26,6 +27,11 @@ from start_here_extractor.live_smoke_matrix import (
     build_live_smoke_matrix_summary,
     normalize_provider_selection,
     render_live_smoke_matrix_markdown,
+)
+from start_here_extractor.live_smoke_release_gate import (
+    LIVE_SMOKE_RELEASE_GATE_VERSION,
+    build_live_smoke_release_decision,
+    render_live_smoke_release_markdown,
 )
 from start_here_extractor.reporter import build_inventory_record
 from start_here_extractor.types import RetryPolicy
@@ -449,3 +455,116 @@ def test_live_smoke_matrix_script_plan_writes_normalized_plan(tmp_path):
     payload = json.loads((out_dir / "live_smoke_matrix_plan.json").read_text(encoding="utf-8"))
     assert payload["providers"] == ["dropbox", "gdrive"]
     assert payload["required_providers"] == ["gdrive"]
+
+
+def _write_matrix_summary(tmp_path: Path, providers: str, required_providers: str) -> Path:
+    matrix_out = tmp_path / "matrix_out"
+    live_smoke_matrix_main(
+        [
+            "gate",
+            "--providers",
+            providers,
+            "--required-providers",
+            required_providers,
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+            "--out-dir",
+            str(matrix_out),
+        ]
+    )
+    assert (matrix_out / "live_smoke_matrix_summary.json").exists()
+    return matrix_out / "live_smoke_matrix_summary.json"
+
+
+def test_live_smoke_release_decision_promotes_when_required_providers_pass(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive", "gdrive")
+
+    decision = build_live_smoke_release_decision(
+        matrix_summary_path=matrix_summary_path,
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+    )
+
+    assert decision.version == LIVE_SMOKE_RELEASE_GATE_VERSION
+    assert decision.promote is True
+    assert decision.decision == "promote"
+    assert decision.failed_required_providers == []
+    markdown = render_live_smoke_release_markdown(decision)
+    assert "Decision: `promote`" in markdown
+
+
+def test_live_smoke_release_decision_holds_for_failed_required_provider(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "token_resolution_failed", "auth_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,graph", "gdrive,graph")
+
+    decision = build_live_smoke_release_decision(
+        matrix_summary_path=matrix_summary_path,
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+    )
+
+    assert decision.promote is False
+    assert decision.decision == "hold"
+    assert decision.failed_required_providers == ["graph"]
+    assert any("token command resolves" in action for action in decision.operator_actions)
+    assert any("Required providers failed promotion gating" in reason for reason in decision.reasons)
+
+
+def test_live_smoke_release_decision_allows_optional_provider_failure_with_manual_review(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "dropbox", "rate_limited", "rate_limit_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,dropbox", "gdrive")
+
+    decision = build_live_smoke_release_decision(
+        matrix_summary_path=matrix_summary_path,
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+    )
+
+    assert decision.promote is True
+    assert decision.failed_optional_providers == ["dropbox"]
+    assert decision.manual_review_required is True
+    assert any("Optional providers failed" in note for note in decision.notes)
+
+
+def test_live_smoke_release_gate_script_writes_decision_and_exits_nonzero_on_hold(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "auth_failed", "auth_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,graph", "gdrive,graph")
+    out_dir = tmp_path / "release_out"
+
+    exit_code = live_smoke_release_gate_main(
+        [
+            "--matrix-summary",
+            str(matrix_summary_path),
+            "--out-dir",
+            str(out_dir),
+            "--runbook-path",
+            str(Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md")),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads((out_dir / "live_smoke_release_gate.json").read_text(encoding="utf-8"))
+    assert payload["decision"] == "hold"
+    assert payload["promote"] is False
+    markdown = (out_dir / "live_smoke_release_gate.md").read_text(encoding="utf-8")
+    assert "Decision: `hold`" in markdown
+
+
+def test_live_smoke_release_gate_holds_when_matrix_summary_missing(tmp_path):
+    out_dir = tmp_path / "release_out"
+    exit_code = live_smoke_release_gate_main(
+        [
+            "--matrix-summary",
+            str(tmp_path / "missing.json"),
+            "--out-dir",
+            str(out_dir),
+            "--runbook-path",
+            str(Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md")),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads((out_dir / "live_smoke_release_gate.json").read_text(encoding="utf-8"))
+    assert payload["matrix_summary_present"] is False
+    assert payload["decision"] == "hold"
