@@ -113,6 +113,17 @@ from start_here_extractor.target_group_adapter_execution_harnesses import (
     build_replayable_dry_run_orchestration_pack_artifacts,
 )
 
+from start_here_extractor.target_group_adapter_harness_results import (
+    DRY_RUN_HARNESS_RESULT_JOURNALS_SCHEMA_VERSION,
+    DRY_RUN_HARNESS_RESULT_REVIEW_QUEUE_SCHEMA_VERSION,
+    DRY_RUN_HARNESS_RESULT_ROLLUP_SCHEMA_VERSION,
+    REPLAY_OUTCOME_COMPARISON_PACKS_SCHEMA_VERSION,
+    REPLAY_OUTCOME_COMPARISON_REVIEW_QUEUE_SCHEMA_VERSION,
+    REPLAY_OUTCOME_COMPARISON_ROLLUP_SCHEMA_VERSION,
+    build_dry_run_harness_result_journal_artifacts,
+    build_replay_outcome_comparison_pack_artifacts,
+)
+
 from start_here_extractor.target_group_adapter_skeletons import (
     TARGET_GROUP_ADAPTER_SKELETONS_SCHEMA_VERSION,
     TARGET_GROUP_ADAPTER_SKELETON_REVIEW_QUEUE_SCHEMA_VERSION,
@@ -2659,3 +2670,143 @@ def test_target_group_execution_harness_and_replayable_dry_run_scripts_write_exp
     assert harnesses_doc["harness_count"] == 1
     assert rollup["fixture_mode_counts"]["success"] == 1
 
+
+
+
+def build_sample_dry_run_harness_result_journals_doc() -> dict:
+    harnesses_doc = build_sample_target_group_adapter_execution_harnesses_doc()
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+    orchestration_doc, orchestration_review_queue, _ = build_replayable_dry_run_orchestration_pack_artifacts(harnesses_doc, execution_packs_doc)
+    assert orchestration_review_queue["item_count"] == 0
+    journals_doc, journal_review_queue, _ = build_dry_run_harness_result_journal_artifacts(harnesses_doc, orchestration_doc)
+    assert journal_review_queue["item_count"] == 0
+    assert journals_doc["journal_count"] == 1
+    return journals_doc
+
+
+def test_build_dry_run_harness_result_journal_artifacts_creates_journal():
+    harnesses_doc = build_sample_target_group_adapter_execution_harnesses_doc()
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+    orchestration_doc, orchestration_review_queue, _ = build_replayable_dry_run_orchestration_pack_artifacts(harnesses_doc, execution_packs_doc)
+    assert orchestration_review_queue["item_count"] == 0
+
+    journals_doc, review_queue, rollup = build_dry_run_harness_result_journal_artifacts(harnesses_doc, orchestration_doc)
+
+    assert journals_doc["schema_version"] == DRY_RUN_HARNESS_RESULT_JOURNALS_SCHEMA_VERSION
+    assert journals_doc["journal_count"] == 1
+    journal = journals_doc["journals"][0]
+    assert journal["state"] == "dry-run-result-journaled"
+    assert len(journal["result_entries"]) == 4
+    assert {item["execution_outcome"] for item in journal["result_entries"]} == {"success", "failure", "deferred", "skipped"}
+    assert review_queue["schema_version"] == DRY_RUN_HARNESS_RESULT_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == DRY_RUN_HARNESS_RESULT_ROLLUP_SCHEMA_VERSION
+    assert rollup["execution_outcome_counts"]["success"] == 1
+
+
+def test_build_replay_outcome_comparison_pack_artifacts_creates_matches():
+    journals_doc = build_sample_dry_run_harness_result_journals_doc()
+    harnesses_doc = build_sample_target_group_adapter_execution_harnesses_doc()
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+    orchestration_doc, orchestration_review_queue, _ = build_replayable_dry_run_orchestration_pack_artifacts(harnesses_doc, execution_packs_doc)
+    assert orchestration_review_queue["item_count"] == 0
+
+    comparison_doc, review_queue, rollup = build_replay_outcome_comparison_pack_artifacts(journals_doc, orchestration_doc)
+
+    assert comparison_doc["schema_version"] == REPLAY_OUTCOME_COMPARISON_PACKS_SCHEMA_VERSION
+    assert comparison_doc["pack_count"] == 1
+    pack = comparison_doc["packs"][0]
+    assert pack["state"] == "replay-compared"
+    assert len(pack["comparison_items"]) == 4
+    assert {item["comparison_outcome"] for item in pack["comparison_items"]} == {"match"}
+    assert review_queue["schema_version"] == REPLAY_OUTCOME_COMPARISON_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == REPLAY_OUTCOME_COMPARISON_ROLLUP_SCHEMA_VERSION
+    assert rollup["comparison_outcome_counts"]["match"] == 4
+
+
+def test_dry_run_harness_result_and_replay_comparison_scripts_write_expected_artifacts(tmp_path: Path):
+    harnesses_doc = build_sample_target_group_adapter_execution_harnesses_doc()
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+    orchestration_doc, orchestration_review_queue, _ = build_replayable_dry_run_orchestration_pack_artifacts(harnesses_doc, execution_packs_doc)
+    assert orchestration_review_queue["item_count"] == 0
+
+    harnesses_path = tmp_path / "target_group_adapter_execution_harnesses.json"
+    harnesses_path.write_text(json.dumps(harnesses_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    orchestration_path = tmp_path / "replayable_dry_run_orchestration_packs.json"
+    orchestration_path.write_text(json.dumps(orchestration_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    journals_dir = tmp_path / "dry_run_journals"
+    comparison_dir = tmp_path / "comparison_packs"
+
+    journals_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_dry_run_harness_result_journals.py",
+            "--target-group-adapter-execution-harnesses-path",
+            str(harnesses_path),
+            "--replayable-dry-run-orchestration-packs-path",
+            str(orchestration_path),
+            "--out-dir",
+            str(journals_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert journals_proc.returncode == 0, journals_proc.stderr
+
+    comparison_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_replay_outcome_comparison_packs.py",
+            "--dry-run-harness-result-journals-path",
+            str(journals_dir / "dry_run_harness_result_journals.json"),
+            "--replayable-dry-run-orchestration-packs-path",
+            str(orchestration_path),
+            "--out-dir",
+            str(comparison_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert comparison_proc.returncode == 0, comparison_proc.stderr
+
+    journals_doc = json.loads((journals_dir / "dry_run_harness_result_journals.json").read_text(encoding="utf-8"))
+    rollup = json.loads((comparison_dir / "replay_outcome_comparison_rollup.json").read_text(encoding="utf-8"))
+    assert journals_doc["journal_count"] == 1
+    assert rollup["comparison_outcome_counts"]["match"] == 4

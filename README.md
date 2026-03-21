@@ -541,3 +541,20 @@ Block 14 adds replayable dry-run execution harnesses and orchestration packs on 
 - `replayable_dry_run_orchestration_packs.json`
 - `replayable_dry_run_orchestration_review_queue.json`
 - `replayable_dry_run_orchestration_rollup.json`
+
+
+## M5C Block 15
+
+Block 15 adds dry-run harness result journals and replay outcome comparison packs on top of the replayable dry-run orchestration layer. It keeps execution offline and contract-driven while producing auditable result journals and comparison artifacts for replay outcomes.
+
+### New scripts
+- `scripts/build_dry_run_harness_result_journals.py`
+- `scripts/build_replay_outcome_comparison_packs.py`
+
+### New artifacts
+- `dry_run_harness_result_journals.json`
+- `dry_run_harness_result_review_queue.json`
+- `dry_run_harness_result_rollup.json`
+- `replay_outcome_comparison_packs.json`
+- `replay_outcome_comparison_review_queue.json`
+- `replay_outcome_comparison_rollup.json`
