@@ -15,6 +15,10 @@ on:
         description: Query string used to find the remote ZIP
         required: true
         default: drive_smoke_test
+      mainline_promotion_ack:
+        description: Required only for main-branch runs. Set to PROMOTE_MAIN after reviewing the gate artifacts.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -264,6 +268,28 @@ PY
           echo "release_decision_exit_code=$RELEASE_DECISION_EXIT_CODE" >> "$GITHUB_OUTPUT"
           cat ./out/live_smoke_release_gate.md >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Build mainline readiness artifacts
+        id: mainline_readiness
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          python ./scripts/live_smoke_mainline_readiness.py \
+            --matrix-summary ./out/live_smoke_matrix_summary.json \
+            --release-gate ./out/live_smoke_release_gate.json \
+            --out-dir ./out \
+            --runbook-path ./LIVE_SMOKE_OPERATOR_RUNBOOK.md \
+            --checklist-path ./MILESTONE_5B_CLOSEOUT_CHECKLIST.md \
+            --github-ref "${{ github.ref }}" \
+            --github-sha "${{ github.sha }}" \
+            --github-event-name "${{ github.event_name }}" \
+            --mainline-ack "${{ inputs.mainline_promotion_ack }}" \
+            --enforce-main-guardrails
+          MAINLINE_READINESS_EXIT_CODE=$?
+          set -e
+          echo "mainline_readiness_exit_code=$MAINLINE_READINESS_EXIT_CODE" >> "$GITHUB_OUTPUT"
+          cat ./out/live_smoke_mainline_readiness.md >> "$GITHUB_STEP_SUMMARY"
+
       - name: List gate outputs
         if: always()
         shell: bash
@@ -280,6 +306,7 @@ PY
           path: |
             out/
             LIVE_SMOKE_OPERATOR_RUNBOOK.md
+            MILESTONE_5B_CLOSEOUT_CHECKLIST.md
 
       - name: Enforce release gate
         if: always()
@@ -292,8 +319,13 @@ from pathlib import Path
 
 matrix_summary = json.loads(Path("./out/live_smoke_matrix_summary.json").read_text(encoding="utf-8"))
 release_decision = json.loads(Path("./out/live_smoke_release_gate.json").read_text(encoding="utf-8"))
+mainline_readiness = json.loads(Path("./out/live_smoke_mainline_readiness.json").read_text(encoding="utf-8"))
 print(f"Matrix gate passed: {matrix_summary['gate_passed']}")
 print(f"Promotion decision: {release_decision['decision']}")
-if not release_decision.get("promote"):
+print(f"Merge ready: {mainline_readiness['merge_ready']}")
+print(f"Mainline ready: {mainline_readiness['mainline_ready']}")
+if not mainline_readiness.get("merge_ready"):
+    raise SystemExit(1)
+if mainline_readiness.get("on_main_branch") and not mainline_readiness.get("mainline_ready"):
     raise SystemExit(1)
 PY
