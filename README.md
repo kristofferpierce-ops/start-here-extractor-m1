@@ -498,3 +498,25 @@ The companion `scripts/build_canonical_request_response_fixture_packs.py` helper
 - `canonical_request_response_fixture_rollup.md`
 
 This creates a stable family-specific seam for future concrete adapters and payload collectors while keeping the pipeline contract-driven, provenance-safe, and downstream-neutral.
+
+## M5C Block 12 target-group adapter skeletons and round-trip normalization cases
+
+The `scripts/build_target_group_adapter_skeletons.py` helper turns target-group adapter packages and canonical request/response fixture packs into concrete target-group adapter skeletons using a target-group skeleton catalog. It writes:
+
+- `target_group_adapter_skeletons.json`
+- `target_group_adapter_skeletons.md`
+- `target_group_adapter_skeleton_review_queue.json`
+- `target_group_adapter_skeleton_review_queue.md`
+- `target_group_adapter_skeleton_rollup.json`
+- `target_group_adapter_skeleton_rollup.md`
+
+The companion `scripts/build_roundtrip_normalization_cases.py` helper turns those skeletons plus the request/response fixture packs into round-trip normalization cases. It writes:
+
+- `roundtrip_normalization_cases.json`
+- `roundtrip_normalization_cases.md`
+- `roundtrip_normalization_review_queue.json`
+- `roundtrip_normalization_review_queue.md`
+- `roundtrip_normalization_rollup.json`
+- `roundtrip_normalization_rollup.md`
+
+This creates a concrete target-group adapter seam for future request/response implementations while keeping the pipeline contract-driven, provenance-safe, and downstream-neutral.

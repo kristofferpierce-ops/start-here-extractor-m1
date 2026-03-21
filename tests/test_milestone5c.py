@@ -91,6 +91,16 @@ from start_here_extractor.target_group_adapter_packages import (
     build_target_group_adapter_package_artifacts,
     build_canonical_request_response_fixture_pack_artifacts,
 )
+from start_here_extractor.target_group_adapter_skeletons import (
+    TARGET_GROUP_ADAPTER_SKELETONS_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_SKELETON_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_SKELETON_ROLLUP_SCHEMA_VERSION,
+    ROUNDTRIP_NORMALIZATION_CASES_SCHEMA_VERSION,
+    ROUNDTRIP_NORMALIZATION_REVIEW_QUEUE_SCHEMA_VERSION,
+    ROUNDTRIP_NORMALIZATION_ROLLUP_SCHEMA_VERSION,
+    build_target_group_adapter_skeleton_artifacts,
+    build_roundtrip_normalization_case_artifacts,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -298,6 +308,32 @@ def sample_target_group_catalog() -> list[dict]:
             "request_template_kind": "ops-core-ledger-request-fixture-v1",
             "response_template_kind": "ops-core-ledger-response-fixture-v1",
             "fixture_modes": ["success", "failure", "defer", "skip"],
+        }
+    ]
+
+
+def sample_target_group_adapter_skeleton_catalog() -> list[dict]:
+    return [
+        {
+            "target_group_key": "ops-core-ledger-group",
+            "target_group_name": "Ops Core Ledger Group",
+            "adapter_group_key": "ops-core-ledger-adapter-group",
+            "adapter_group_name": "Ops Core Ledger Adapter Group",
+            "adapter_kind": "ops-core-ledger-http-stub",
+            "supported_target_group_keys": ["ops-core-ledger-group"],
+            "supported_package_families": ["ops-core-ledger-package-family"],
+            "supported_request_template_kinds": ["ops-core-ledger-request-fixture-v1"],
+            "supported_response_template_kinds": ["ops-core-ledger-response-fixture-v1"],
+            "supported_raw_payload_kinds": ["ops-core-ledger-raw-payload-v1"],
+            "supported_target_systems": ["ops-core"],
+            "supported_target_types": ["evidence-ledger"],
+            "supported_operations": ["upsert-evidence-record"],
+            "request_method": "POST",
+            "request_path_template": "/ops-core/ledger/upsert",
+            "success_status_codes": [200, 201],
+            "failure_status_codes": [400, 409, 500],
+            "defer_status_codes": [202],
+            "skip_status_codes": [204],
         }
     ]
 
@@ -2145,4 +2181,133 @@ def test_target_group_package_and_fixture_scripts_write_expected_artifacts(tmp_p
     packages_doc = json.loads((packages_dir / "target_group_adapter_packages.json").read_text(encoding="utf-8"))
     rollup = json.loads((packs_dir / "canonical_request_response_fixture_rollup.json").read_text(encoding="utf-8"))
     assert packages_doc["package_count"] == 1
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+def build_sample_target_group_adapter_skeletons_doc() -> dict:
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert review_queue["item_count"] == 0
+    skeletons_doc, skeleton_review_queue, _ = build_target_group_adapter_skeleton_artifacts(packages_doc, fixture_packs_doc, sample_target_group_adapter_skeleton_catalog())
+    assert skeleton_review_queue["item_count"] == 0
+    assert skeletons_doc["skeleton_count"] == 1
+    return skeletons_doc
+
+
+
+def test_build_target_group_adapter_skeleton_artifacts_creates_skeleton():
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc, review_queue, rollup = build_target_group_adapter_skeleton_artifacts(packages_doc, fixture_packs_doc, sample_target_group_adapter_skeleton_catalog())
+
+    assert skeletons_doc["schema_version"] == TARGET_GROUP_ADAPTER_SKELETONS_SCHEMA_VERSION
+    assert skeletons_doc["skeleton_count"] == 1
+    skeleton = skeletons_doc["skeletons"][0]
+    assert skeleton["state"] == "skeletonized"
+    assert skeleton["adapter_group"]["adapter_group_key"] == "ops-core-ledger-adapter-group"
+    assert skeleton["request_skeleton"]["request_method"] == "POST"
+    assert review_queue["schema_version"] == TARGET_GROUP_ADAPTER_SKELETON_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_GROUP_ADAPTER_SKELETON_ROLLUP_SCHEMA_VERSION
+    assert rollup["adapter_group_counts"]["ops-core-ledger-adapter-group"] == 1
+
+
+
+def test_build_target_group_adapter_skeleton_artifacts_queues_missing_catalog_match():
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc, review_queue, rollup = build_target_group_adapter_skeleton_artifacts(packages_doc, fixture_packs_doc, [])
+
+    assert skeletons_doc["skeleton_count"] == 0
+    assert review_queue["item_count"] == 1
+    assert "no_target_group_skeleton_match" in review_queue["items"][0]["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_build_roundtrip_normalization_case_artifacts_creates_cases():
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc, skeleton_review_queue, _ = build_target_group_adapter_skeleton_artifacts(packages_doc, fixture_packs_doc, sample_target_group_adapter_skeleton_catalog())
+    assert skeleton_review_queue["item_count"] == 0
+
+    cases_doc, review_queue, rollup = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+
+    assert cases_doc["schema_version"] == ROUNDTRIP_NORMALIZATION_CASES_SCHEMA_VERSION
+    assert cases_doc["case_count"] == 4
+    case = cases_doc["cases"][0]
+    assert case["raw_request_payload"]["request_method"] == "POST"
+    assert case["expected_normalized_result"]["outcome_status"] in {"success", "failure", "defer", "skip"}
+    assert review_queue["schema_version"] == ROUNDTRIP_NORMALIZATION_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == ROUNDTRIP_NORMALIZATION_ROLLUP_SCHEMA_VERSION
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+
+def test_target_group_skeleton_and_roundtrip_scripts_write_expected_artifacts(tmp_path: Path):
+    packages_path = tmp_path / "target_group_adapter_packages.json"
+    packages_path.write_text(
+        json.dumps(build_sample_target_group_packages_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    fixture_packs_path = tmp_path / "canonical_request_response_fixture_packs.json"
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(build_sample_target_group_packages_doc())
+    assert fixture_review_queue["item_count"] == 0
+    fixture_packs_path.write_text(
+        json.dumps(fixture_packs_doc, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    skeleton_catalog_path = tmp_path / "target_group_adapter_skeleton_catalog.json"
+    skeleton_catalog_path.write_text(
+        json.dumps({"target_group_adapter_skeletons": sample_target_group_adapter_skeleton_catalog()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    skeletons_dir = tmp_path / "target_group_skeletons"
+    roundtrip_dir = tmp_path / "roundtrip_cases"
+
+    skeletons_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_group_adapter_skeletons.py",
+            "--target-group-packages-path",
+            str(packages_path),
+            "--request-response-fixture-packs-path",
+            str(fixture_packs_path),
+            "--target-group-skeleton-catalog-path",
+            str(skeleton_catalog_path),
+            "--out-dir",
+            str(skeletons_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert skeletons_proc.returncode == 0, skeletons_proc.stderr
+
+    roundtrip_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_roundtrip_normalization_cases.py",
+            "--target-group-adapter-skeletons-path",
+            str(skeletons_dir / "target_group_adapter_skeletons.json"),
+            "--request-response-fixture-packs-path",
+            str(fixture_packs_path),
+            "--out-dir",
+            str(roundtrip_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert roundtrip_proc.returncode == 0, roundtrip_proc.stderr
+
+    skeletons_doc = json.loads((skeletons_dir / "target_group_adapter_skeletons.json").read_text(encoding="utf-8"))
+    rollup = json.loads((roundtrip_dir / "roundtrip_normalization_rollup.json").read_text(encoding="utf-8"))
+    assert skeletons_doc["skeleton_count"] == 1
     assert rollup["fixture_mode_counts"]["success"] == 1
