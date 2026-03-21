@@ -17,3 +17,6 @@ __pycache__/
 # OS/editor noise
 .DS_Store
 Thumbs.db
+
+# Checked-in deterministic smoke fixtures
+!tests/fixtures/live_smoke/**/logs/*.log

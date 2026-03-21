@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from ..errors import RemoteProviderError
-from ..types import RetryPolicy
+from ..types import RetryDecision, RetryPolicy
 from .auth import AccessTokenProvider, run_with_auth_retry
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate, encode_download_hint
 from .http import Requestor, atomic_download, request_json, urllib_requestor
+from .telemetry import CloudProviderRuntimeState
 
 
 @dataclass(frozen=True)
@@ -25,12 +27,21 @@ class DropboxLocator(RemoteLocator):
         self._auth = auth
         self._requestor = requestor
         self._retry_policy = retry_policy
+        self._runtime = CloudProviderRuntimeState(self.provider, retry_policy=retry_policy)
+
+    def runtime_state(self) -> dict[str, object]:
+        return self._runtime.public_state(token_provider=self._auth.access_token_provider)
 
     def _auth_headers(self) -> dict[str, str]:
         token = self._auth.access_token_provider.get_token() if self._auth.access_token_provider else self._auth.access_token
         return {'Authorization': f'Bearer {token}'}
 
+    def _record_retry(self, operation: str, decision: RetryDecision, exc: Exception) -> None:
+        self._runtime.record_retry(operation, decision, exc)
+
     def search(self, query: RemoteSearchQuery, *, page_token: Optional[str] = None, page_size: int = 100) -> tuple[list[RemoteZipCandidate], Optional[str]]:
+        operation = 'search'
+        self._runtime.record_operation_start(operation, token_provider=self._auth.access_token_provider)
         if page_token:
             url = 'https://api.dropboxapi.com/2/files/search/continue_v2'
             payload = {'cursor': page_token}
@@ -44,10 +55,24 @@ class DropboxLocator(RemoteLocator):
             if query.folder_id:
                 options['path'] = query.folder_id
             payload = {'query': query.text or '', 'options': options}
-        response = run_with_auth_retry(
-            lambda: request_json('POST', url, headers=self._auth_headers(), payload=payload, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
-            self._auth.access_token_provider,
-        )
+        try:
+            response = run_with_auth_retry(
+                lambda: request_json(
+                    'POST',
+                    url,
+                    headers=self._auth_headers(),
+                    payload=payload,
+                    timeout=self._auth.timeout_seconds,
+                    requestor=self._requestor,
+                    retry_policy=self._retry_policy,
+                    on_retry=lambda decision, exc: self._record_retry(operation, decision, exc),
+                ),
+                self._auth.access_token_provider,
+                on_auth_retry=lambda exc: self._runtime.record_auth_retry(operation, exc, token_provider=self._auth.access_token_provider),
+            )
+        except Exception as exc:
+            self._runtime.record_failure(operation, exc, token_provider=self._auth.access_token_provider)
+            raise
         matches = response.get('matches', [])
         if not isinstance(matches, list):
             raise RemoteProviderError('dropbox-matches-not-a-list')
@@ -84,17 +109,36 @@ class DropboxLocator(RemoteLocator):
         if bool(response.get('has_more')):
             cursor = response.get('cursor')
             next_cursor = str(cursor) if cursor else None
+        self._runtime.record_success(operation, token_provider=self._auth.access_token_provider, status_code=200)
         return candidates, next_cursor
 
     def _download_headers(self, candidate: RemoteZipCandidate) -> dict[str, str]:
         arg = {'path': candidate.id if candidate.id.startswith('id:') else candidate.id}
         headers = self._auth_headers()
-        headers['Dropbox-API-Arg'] = __import__('json').dumps(arg, separators=(',', ':'))
+        headers['Dropbox-API-Arg'] = json.dumps(arg, separators=(',', ':'))
         return headers
 
     def download(self, candidate: RemoteZipCandidate, dest_dir: str) -> str:
+        operation = 'download'
+        self._runtime.record_operation_start(operation, token_provider=self._auth.access_token_provider)
         dest_path = Path(dest_dir) / candidate.name
-        return run_with_auth_retry(
-            lambda: atomic_download('POST', 'https://content.dropboxapi.com/2/files/download', headers=self._download_headers(candidate), dest_path=dest_path, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
-            self._auth.access_token_provider,
-        )
+        try:
+            local_path = run_with_auth_retry(
+                lambda: atomic_download(
+                    'POST',
+                    'https://content.dropboxapi.com/2/files/download',
+                    headers=self._download_headers(candidate),
+                    dest_path=dest_path,
+                    timeout=self._auth.timeout_seconds,
+                    requestor=self._requestor,
+                    retry_policy=self._retry_policy,
+                    on_retry=lambda decision, exc: self._record_retry(operation, decision, exc),
+                ),
+                self._auth.access_token_provider,
+                on_auth_retry=lambda exc: self._runtime.record_auth_retry(operation, exc, token_provider=self._auth.access_token_provider),
+            )
+        except Exception as exc:
+            self._runtime.record_failure(operation, exc, token_provider=self._auth.access_token_provider)
+            raise
+        self._runtime.record_success(operation, token_provider=self._auth.access_token_provider, status_code=200)
+        return local_path

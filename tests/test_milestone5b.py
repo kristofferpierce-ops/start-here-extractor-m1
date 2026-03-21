@@ -1,12 +1,43 @@
 from __future__ import annotations
 
+import json
+import shutil
 import subprocess
+from pathlib import Path
 
+import pytest
+
+from scripts.live_smoke_matrix import main as live_smoke_matrix_main
+from scripts.live_smoke_release_gate import main as live_smoke_release_gate_main
+from scripts.live_smoke_summary import main as live_smoke_summary_main
 from start_here_extractor.cloud.auth import build_access_token_provider, resolve_access_token
 from start_here_extractor.cloud.base import RemoteSearchQuery
 from start_here_extractor.cloud.gdrive import GoogleDriveAuthConfig, GoogleDriveLocator
 from start_here_extractor.cloud.http import HttpResponse
-from start_here_extractor.errors import RemoteAuthError
+from start_here_extractor.errors import RemoteAuthError, RemoteRateLimitError
+from start_here_extractor.live_smoke import (
+    LIVE_SMOKE_ARTIFACT_CONTRACT_VERSION,
+    build_live_smoke_artifact_contract,
+    build_live_smoke_summary,
+    render_live_smoke_markdown,
+)
+from start_here_extractor.live_smoke_matrix import (
+    LIVE_SMOKE_MATRIX_SUMMARY_VERSION,
+    build_live_smoke_matrix_plan,
+    build_live_smoke_matrix_summary,
+    normalize_provider_selection,
+    render_live_smoke_matrix_markdown,
+)
+from start_here_extractor.live_smoke_release_gate import (
+    LIVE_SMOKE_RELEASE_GATE_VERSION,
+    build_live_smoke_release_decision,
+    render_live_smoke_release_markdown,
+)
+from start_here_extractor.reporter import build_inventory_record
+from start_here_extractor.types import RetryPolicy
+
+
+FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "live_smoke"
 
 
 class CommandSequenceRunner:
@@ -34,6 +65,27 @@ class AuthRefreshingRequestor:
             headers={"Content-Type": "application/json"},
             body=b'{"files": []}',
         )
+
+
+class RateLimitedThenSuccessRequestor:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, method, url, headers=None, data=None, timeout=30.0):
+        self.calls += 1
+        if self.calls == 1:
+            raise RemoteRateLimitError("too-many-requests", retry_after_seconds=0, status_code=429, headers={"Retry-After": "0"})
+        return HttpResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=b'{"files": []}',
+        )
+
+
+def _stage_fixture(tmp_path: Path, case: str) -> Path:
+    root = tmp_path / case
+    shutil.copytree(FIXTURE_ROOT / case, root)
+    return root
 
 
 def test_resolve_access_token_accepts_json_command_payload():
@@ -82,3 +134,437 @@ def test_gdrive_search_refreshes_command_token_after_auth_failure():
     assert page_token is None
     assert requestor.calls == ["Bearer old-token", "Bearer new-token"]
     assert provider.public_state()["refresh_count"] == 1
+    runtime = locator.runtime_state()
+    assert runtime["auth_refresh_count"] == 1
+    assert runtime["auth_state"] == "fresh"
+    assert "provider-auth-refresh" in runtime["notes"]
+
+
+def test_gdrive_search_records_rate_limit_and_retry_telemetry():
+    locator = GoogleDriveLocator(
+        GoogleDriveAuthConfig(access_token="static-token"),
+        requestor=RateLimitedThenSuccessRequestor(),
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0, jitter_seconds=0.0),
+    )
+
+    candidates, page_token = locator.search(RemoteSearchQuery(text="start here"))
+
+    assert candidates == []
+    assert page_token is None
+    runtime = locator.runtime_state()
+    assert runtime["request_count"] == 1
+    assert runtime["success_count"] == 1
+    assert runtime["quota"]["rate_limited"] is True
+    assert runtime["quota"]["throttle_count"] == 1
+    assert runtime["quota"]["last_status_code"] == 429
+    assert runtime["retry"]["observed_retries"] == 1
+    assert runtime["retry"]["last_reason"] == "retry-after"
+    assert runtime["retry"]["policy"]["max_attempts"] == 2
+    assert "provider-rate-limited" in runtime["notes"]
+
+
+def test_inventory_monitoring_includes_provider_health_and_quota_state():
+    record = build_inventory_record(
+        {
+            "zip_file": {"path": "C:/tmp/example.zip", "md5": "abc"},
+            "selected_candidate": {"name": "START HERE.txt"},
+            "extracted_file": {"path": "C:/tmp/out/START HERE.txt", "size_bytes": 12, "md5": "def"},
+            "preview": {"text": "hello", "encoding": "utf-8"},
+            "_runtime_cloud": {
+                "token_health": {
+                    "source": "command",
+                    "status": "fresh",
+                    "refresh_count": 1,
+                    "notes": ["token-near-expiry"],
+                },
+                "provider_health": {
+                    "provider": "gdrive",
+                    "auth_state": "fresh",
+                    "auth_refresh_count": 1,
+                    "request_count": 2,
+                    "success_count": 1,
+                    "error_count": 0,
+                    "last_operation": "download",
+                    "last_status_code": 200,
+                    "notes": ["provider-rate-limited"],
+                    "quota": {
+                        "rate_limited": True,
+                        "throttle_count": 2,
+                        "retry_after_seconds": 0.0,
+                        "last_status_code": 429,
+                        "last_reason": "retry-after",
+                        "last_event_at": "2030-01-01T00:00:00+00:00",
+                    },
+                    "retry": {
+                        "observed_retries": 2,
+                        "last_delay_seconds": 0.0,
+                        "last_reason": "retry-after",
+                        "last_attempt": 2,
+                        "exhausted": False,
+                        "last_event_at": "2030-01-01T00:00:00+00:00",
+                        "policy": {
+                            "max_attempts": 3,
+                            "base_delay_seconds": 0.25,
+                            "max_delay_seconds": 5.0,
+                            "jitter_seconds": 0.0,
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    provider_state = record["monitoring"]["provider_state"]
+    assert provider_state["auth_state"] == "fresh"
+    assert provider_state["rate_limited"] is True
+    assert provider_state["quota"]["throttle_count"] == 2
+    assert provider_state["retry"]["observed_retries"] == 2
+    assert record["monitoring"]["provider_health"]["provider"] == "gdrive"
+    assert record["monitoring"]["review_required"] is True
+    assert "provider-rate-limited" in record["warnings"]
+    assert "token-near-expiry" in record["warnings"]
+
+
+@pytest.mark.parametrize(
+    ("case", "provider", "query", "cli_exit_code", "expected_classification", "expected_success"),
+    [
+        ("success", "gdrive", "drive_smoke_test", 0, "success", True),
+        ("no_remote_zip", "dropbox", "missing_test", 1, "no-remote-zip", False),
+        ("token_resolution_failed", "graph", "auth_test", 1, "token-resolution-failed", False),
+        ("auth_failed", "gdrive", "auth_test", 1, "auth-failed", False),
+        ("rate_limited", "dropbox", "rate_limit_test", 1, "rate-limited", False),
+    ],
+)
+def test_live_smoke_summary_classification_from_fixtures(tmp_path, case, provider, query, cli_exit_code, expected_classification, expected_success):
+    root = _stage_fixture(tmp_path, case)
+    summary = build_live_smoke_summary(
+        provider=provider,
+        query=query,
+        cli_exit_code=cli_exit_code,
+        report_dir=root / "reports",
+        monitoring_dir=root / "monitoring",
+        audit_dir=root / "audit",
+        stdout_log=root / "logs" / "cli.stdout.log",
+        stderr_log=root / "logs" / "cli.stderr.log",
+    )
+
+    assert summary.classification == expected_classification
+    assert summary.success is expected_success
+    if case == "success":
+        assert summary.inventory_count == 1
+        assert summary.monitoring_event_count == 1
+        assert summary.audit_event_count == 1
+        markdown = render_live_smoke_markdown(summary)
+        assert "Classification: `success`" in markdown
+    if case == "rate_limited":
+        assert summary.reason == "Provider throttling exhausted the hosted smoke retry budget."
+
+
+def test_live_smoke_artifact_contract_from_success_fixture(tmp_path):
+    root = _stage_fixture(tmp_path, "success")
+    out_dir = root / "out"
+    out_dir.mkdir()
+    summary_json_path = out_dir / "live_smoke_summary.json"
+    summary_markdown_path = out_dir / "live_smoke_summary.md"
+    summary_json_path.write_text("{}\n", encoding="utf-8")
+    summary_markdown_path.write_text("# placeholder\n", encoding="utf-8")
+
+    contract = build_live_smoke_artifact_contract(
+        report_dir=root / "reports",
+        monitoring_dir=root / "monitoring",
+        audit_dir=root / "audit",
+        stdout_log=root / "logs" / "cli.stdout.log",
+        stderr_log=root / "logs" / "cli.stderr.log",
+        summary_json_path=summary_json_path,
+        summary_markdown_path=summary_markdown_path,
+    )
+
+    payload = contract.to_dict()
+    assert payload["version"] == LIVE_SMOKE_ARTIFACT_CONTRACT_VERSION
+    assert payload["valid"] is True
+    assert payload["missing_required"] == []
+    artifacts = {artifact["name"]: artifact for artifact in payload["artifacts"]}
+    assert artifacts["summary_json"]["present"] is True
+    assert artifacts["summary_markdown"]["present"] is True
+    assert artifacts["stdout_log"]["present"] is True
+    assert artifacts["stderr_log"]["present"] is True
+    assert artifacts["inventory_jsonl"]["record_count"] == 1
+    assert artifacts["monitoring_jsonl"]["record_count"] == 1
+    assert artifacts["audit_jsonl"]["record_count"] == 1
+
+
+def test_live_smoke_artifact_contract_flags_missing_required_log(tmp_path):
+    root = _stage_fixture(tmp_path, "success")
+    missing_log = root / "logs" / "cli.stderr.log"
+    missing_log.unlink()
+
+    contract = build_live_smoke_artifact_contract(
+        report_dir=root / "reports",
+        monitoring_dir=root / "monitoring",
+        audit_dir=root / "audit",
+        stdout_log=root / "logs" / "cli.stdout.log",
+        stderr_log=missing_log,
+    )
+
+    assert contract.valid is False
+    assert contract.missing_required == ["stderr_log"]
+
+
+def test_live_smoke_summary_script_writes_summary_and_contract(tmp_path):
+    root = _stage_fixture(tmp_path, "success")
+    out_dir = tmp_path / "generated"
+
+    exit_code = live_smoke_summary_main(
+        [
+            "--provider",
+            "gdrive",
+            "--query",
+            "drive_smoke_test",
+            "--cli-exit-code",
+            "0",
+            "--out-dir",
+            str(out_dir),
+            "--report-dir",
+            str(root / "reports"),
+            "--monitoring-dir",
+            str(root / "monitoring"),
+            "--audit-dir",
+            str(root / "audit"),
+            "--stdout-log",
+            str(root / "logs" / "cli.stdout.log"),
+            "--stderr-log",
+            str(root / "logs" / "cli.stderr.log"),
+        ]
+    )
+
+    assert exit_code == 0
+    summary_payload = json.loads((out_dir / "live_smoke_summary.json").read_text(encoding="utf-8"))
+    contract_payload = json.loads((out_dir / "live_smoke_artifact_contract.json").read_text(encoding="utf-8"))
+    assert summary_payload["classification"] == "success"
+    assert contract_payload["valid"] is True
+    assert contract_payload["version"] == LIVE_SMOKE_ARTIFACT_CONTRACT_VERSION
+    markdown = (out_dir / "live_smoke_summary.md").read_text(encoding="utf-8")
+    assert "Artifact contract valid: `true`" in markdown
+
+
+def _write_matrix_provider_artifacts(tmp_path: Path, provider: str, case: str, query: str, cli_exit_code: int) -> Path:
+    fixture_root = tmp_path / f"fixture_{provider}_{case}"
+    shutil.copytree(FIXTURE_ROOT / case, fixture_root)
+    artifact_dir = tmp_path / "artifacts" / f"live-smoke-{provider}"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    exit_code = live_smoke_summary_main(
+        [
+            "--provider",
+            provider,
+            "--query",
+            query,
+            "--cli-exit-code",
+            str(cli_exit_code),
+            "--out-dir",
+            str(artifact_dir),
+            "--report-dir",
+            str(fixture_root / "reports"),
+            "--monitoring-dir",
+            str(fixture_root / "monitoring"),
+            "--audit-dir",
+            str(fixture_root / "audit"),
+            "--stdout-log",
+            str(fixture_root / "logs" / "cli.stdout.log"),
+            "--stderr-log",
+            str(fixture_root / "logs" / "cli.stderr.log"),
+        ]
+    )
+    assert exit_code == 0
+    return artifact_dir
+
+
+def test_normalize_provider_selection_accepts_all_and_dedupes():
+    assert normalize_provider_selection("gdrive, dropbox, gdrive", default_all=True) == ["gdrive", "dropbox"]
+    assert normalize_provider_selection("all", default_all=True) == ["gdrive", "dropbox", "graph"]
+
+
+def test_build_live_smoke_matrix_plan_rejects_required_provider_outside_selection():
+    with pytest.raises(ValueError, match="required provider"):
+        build_live_smoke_matrix_plan("gdrive,dropbox", "graph")
+
+
+def test_live_smoke_matrix_summary_aggregates_provider_artifacts(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "dropbox", "auth_failed", "auth_test", 1)
+
+    summary = build_live_smoke_matrix_summary(
+        artifacts_root=tmp_path / "artifacts",
+        providers=["gdrive", "dropbox", "graph"],
+        required_providers=["gdrive", "dropbox"],
+    )
+
+    assert summary.version == LIVE_SMOKE_MATRIX_SUMMARY_VERSION
+    assert summary.gate_passed is False
+    assert summary.successful_providers == ["gdrive"]
+    assert "dropbox" in summary.failed_providers
+    assert "graph" in summary.missing_providers
+    assert summary.provider_results[0].provider == "gdrive"
+    markdown = render_live_smoke_matrix_markdown(summary)
+    assert "Gate passed: `false`" in markdown
+    assert "Provider: `dropbox`" in markdown
+
+
+def test_live_smoke_matrix_script_gate_writes_summary_and_fails_for_required_provider(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "token_resolution_failed", "auth_test", 1)
+    out_dir = tmp_path / "matrix_out"
+
+    exit_code = live_smoke_matrix_main(
+        [
+            "gate",
+            "--providers",
+            "gdrive,graph",
+            "--required-providers",
+            "gdrive,graph",
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads((out_dir / "live_smoke_matrix_summary.json").read_text(encoding="utf-8"))
+    assert payload["gate_passed"] is False
+    assert payload["failed_providers"] == ["graph"]
+    markdown = (out_dir / "live_smoke_matrix_summary.md").read_text(encoding="utf-8")
+    assert "Required providers: `gdrive, graph`" in markdown
+
+
+def test_live_smoke_matrix_script_plan_writes_normalized_plan(tmp_path):
+    out_dir = tmp_path / "plan_out"
+
+    exit_code = live_smoke_matrix_main(
+        [
+            "plan",
+            "--providers",
+            "dropbox, gdrive, dropbox",
+            "--required-providers",
+            "gdrive",
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads((out_dir / "live_smoke_matrix_plan.json").read_text(encoding="utf-8"))
+    assert payload["providers"] == ["dropbox", "gdrive"]
+    assert payload["required_providers"] == ["gdrive"]
+
+
+def _write_matrix_summary(tmp_path: Path, providers: str, required_providers: str) -> Path:
+    matrix_out = tmp_path / "matrix_out"
+    live_smoke_matrix_main(
+        [
+            "gate",
+            "--providers",
+            providers,
+            "--required-providers",
+            required_providers,
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+            "--out-dir",
+            str(matrix_out),
+        ]
+    )
+    assert (matrix_out / "live_smoke_matrix_summary.json").exists()
+    return matrix_out / "live_smoke_matrix_summary.json"
+
+
+def test_live_smoke_release_decision_promotes_when_required_providers_pass(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive", "gdrive")
+
+    decision = build_live_smoke_release_decision(
+        matrix_summary_path=matrix_summary_path,
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+    )
+
+    assert decision.version == LIVE_SMOKE_RELEASE_GATE_VERSION
+    assert decision.promote is True
+    assert decision.decision == "promote"
+    assert decision.failed_required_providers == []
+    markdown = render_live_smoke_release_markdown(decision)
+    assert "Decision: `promote`" in markdown
+
+
+def test_live_smoke_release_decision_holds_for_failed_required_provider(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "token_resolution_failed", "auth_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,graph", "gdrive,graph")
+
+    decision = build_live_smoke_release_decision(
+        matrix_summary_path=matrix_summary_path,
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+    )
+
+    assert decision.promote is False
+    assert decision.decision == "hold"
+    assert decision.failed_required_providers == ["graph"]
+    assert any("token command resolves" in action for action in decision.operator_actions)
+    assert any("Required providers failed promotion gating" in reason for reason in decision.reasons)
+
+
+def test_live_smoke_release_decision_allows_optional_provider_failure_with_manual_review(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "dropbox", "rate_limited", "rate_limit_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,dropbox", "gdrive")
+
+    decision = build_live_smoke_release_decision(
+        matrix_summary_path=matrix_summary_path,
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+    )
+
+    assert decision.promote is True
+    assert decision.failed_optional_providers == ["dropbox"]
+    assert decision.manual_review_required is True
+    assert any("Optional providers failed" in note for note in decision.notes)
+
+
+def test_live_smoke_release_gate_script_writes_decision_and_exits_nonzero_on_hold(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "auth_failed", "auth_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,graph", "gdrive,graph")
+    out_dir = tmp_path / "release_out"
+
+    exit_code = live_smoke_release_gate_main(
+        [
+            "--matrix-summary",
+            str(matrix_summary_path),
+            "--out-dir",
+            str(out_dir),
+            "--runbook-path",
+            str(Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md")),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads((out_dir / "live_smoke_release_gate.json").read_text(encoding="utf-8"))
+    assert payload["decision"] == "hold"
+    assert payload["promote"] is False
+    markdown = (out_dir / "live_smoke_release_gate.md").read_text(encoding="utf-8")
+    assert "Decision: `hold`" in markdown
+
+
+def test_live_smoke_release_gate_holds_when_matrix_summary_missing(tmp_path):
+    out_dir = tmp_path / "release_out"
+    exit_code = live_smoke_release_gate_main(
+        [
+            "--matrix-summary",
+            str(tmp_path / "missing.json"),
+            "--out-dir",
+            str(out_dir),
+            "--runbook-path",
+            str(Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md")),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads((out_dir / "live_smoke_release_gate.json").read_text(encoding="utf-8"))
+    assert payload["matrix_summary_present"] is False
+    assert payload["decision"] == "hold"

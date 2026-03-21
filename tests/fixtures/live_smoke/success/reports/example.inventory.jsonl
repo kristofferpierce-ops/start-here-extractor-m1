@@ -1,0 +1,1 @@
+{"outcome":"success","zip_path":"C:/tmp/example.zip","provenance":{"source_type":"gdrive"},"policy_decision":{"decision":"allow"},"warnings":[],"errors":[],"monitoring":{"review_required":false,"provider_state":{"auth_state":"fresh","rate_limited":false,"quota":{"throttle_count":0},"retry":{"observed_retries":0},"notes":[]}}}

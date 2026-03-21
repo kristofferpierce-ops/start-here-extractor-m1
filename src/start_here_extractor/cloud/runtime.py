@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..types import RetryPolicy
 from .auth import AccessTokenProvider
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate
 from .dropbox import DropboxAuthConfig, DropboxLocator
@@ -23,6 +24,7 @@ class CloudRunConfig:
     acknowledge_abuse: bool = False
     operator_approval_ref: str | None = None
     require_operator_approval_for_abuse: bool = True
+    retry_policy: RetryPolicy | None = None
 
 
 def build_locator(config: CloudRunConfig) -> RemoteLocator:
@@ -35,17 +37,22 @@ def build_locator(config: CloudRunConfig) -> RemoteLocator:
                 acknowledge_abuse=config.acknowledge_abuse,
                 operator_approval_ref=config.operator_approval_ref,
                 require_operator_approval_for_abuse=config.require_operator_approval_for_abuse,
-            )
+            ),
+            retry_policy=config.retry_policy,
         )
     if config.provider == 'dropbox':
-        return DropboxLocator(DropboxAuthConfig(access_token=config.access_token or '', access_token_provider=config.access_token_provider))
+        return DropboxLocator(
+            DropboxAuthConfig(access_token=config.access_token or '', access_token_provider=config.access_token_provider),
+            retry_policy=config.retry_policy,
+        )
     if config.provider == 'graph':
         return MicrosoftGraphLocator(
             MicrosoftGraphAuthConfig(
                 access_token=config.access_token or '',
                 access_token_provider=config.access_token_provider,
                 drive_scope=config.graph_drive_scope,
-            )
+            ),
+            retry_policy=config.retry_policy,
         )
     raise ValueError(f'unsupported-cloud-provider:{config.provider}')
 
