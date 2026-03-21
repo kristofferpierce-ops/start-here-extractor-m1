@@ -293,3 +293,21 @@ Example:
 - `admin`: operator rights plus configure / override placeholders
 
 All playbook actions are written to an append-only action audit stream with idempotency keys so reruns can safely skip already completed actions.
+
+## Milestone 5C block 1: generalized ingestion backbone foundation
+
+This stage starts the broader connector-first Milestone 5C direction by adding a generic ingestion journal on top of existing inventory artifacts.
+
+What it adds:
+- a connector-neutral ingestion record with `raw`, `normalized`, `matched`, `approved`, and `applied` pipeline stages
+- deterministic `event_id` derivation from source identity and evidence fingerprints
+- preserved provenance, governance refs, and review state without leaking secrets
+- a journal builder script for turning inventory JSONL outputs into a reusable ingestion stream
+
+Example:
+
+```powershell
+python .\scripts\build_ingestion_journal.py --inventory-dir .\out\reports --out-dir .\out\ingestion
+```
+
+This is intentionally additive. It does not replace the extractor inventory as source of truth. It creates the first generic backbone artifact that future connectors such as communications, CRM, and financial systems can share.
