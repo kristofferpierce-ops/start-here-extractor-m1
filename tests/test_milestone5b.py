@@ -9,6 +9,7 @@ import pytest
 
 from scripts.live_smoke_matrix import main as live_smoke_matrix_main
 from scripts.live_smoke_release_gate import main as live_smoke_release_gate_main
+from scripts.live_smoke_mainline_readiness import main as live_smoke_mainline_readiness_main
 from scripts.live_smoke_summary import main as live_smoke_summary_main
 from start_here_extractor.cloud.auth import build_access_token_provider, resolve_access_token
 from start_here_extractor.cloud.base import RemoteSearchQuery
@@ -32,6 +33,12 @@ from start_here_extractor.live_smoke_release_gate import (
     LIVE_SMOKE_RELEASE_GATE_VERSION,
     build_live_smoke_release_decision,
     render_live_smoke_release_markdown,
+)
+from start_here_extractor.live_smoke_mainline_readiness import (
+    LIVE_SMOKE_MAINLINE_READINESS_VERSION,
+    build_live_smoke_mainline_readiness,
+    build_live_smoke_release_bundle,
+    render_live_smoke_mainline_markdown,
 )
 from start_here_extractor.reporter import build_inventory_record
 from start_here_extractor.types import RetryPolicy
@@ -568,3 +575,136 @@ def test_live_smoke_release_gate_holds_when_matrix_summary_missing(tmp_path):
     payload = json.loads((out_dir / "live_smoke_release_gate.json").read_text(encoding="utf-8"))
     assert payload["matrix_summary_present"] is False
     assert payload["decision"] == "hold"
+
+
+
+def _write_release_gate(tmp_path: Path, providers: str, required_providers: str) -> Path:
+    matrix_summary_path = _write_matrix_summary(tmp_path, providers, required_providers)
+    release_out = tmp_path / "release_out"
+    exit_code = live_smoke_release_gate_main(
+        [
+            "--matrix-summary",
+            str(matrix_summary_path),
+            "--out-dir",
+            str(release_out),
+            "--runbook-path",
+            str(Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md")),
+        ]
+    )
+    assert (release_out / "live_smoke_release_gate.json").exists()
+    assert exit_code in {0, 1}
+    return release_out / "live_smoke_release_gate.json"
+
+
+def test_live_smoke_mainline_readiness_is_ready_for_main_when_all_selected_providers_pass(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "success", "drive_smoke_test", 0)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,graph", "gdrive,graph")
+    release_gate_path = _write_release_gate(tmp_path, "gdrive,graph", "gdrive,graph")
+
+    readiness = build_live_smoke_mainline_readiness(
+        matrix_summary_path=matrix_summary_path,
+        release_gate_path=release_gate_path,
+        checklist_path=Path("MILESTONE_5B_CLOSEOUT_CHECKLIST.md"),
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+        github_ref="refs/heads/m5b-block7-mainline-readiness",
+        github_sha="abc123",
+        github_event_name="workflow_dispatch",
+    )
+
+    assert readiness.version == LIVE_SMOKE_MAINLINE_READINESS_VERSION
+    assert readiness.merge_ready is True
+    assert readiness.mainline_eligible is True
+    assert readiness.mainline_ready is True
+    assert readiness.decision == "ready-for-main"
+    bundle = build_live_smoke_release_bundle(readiness)
+    assert bundle["status"]["mainline_ready"] is True
+    markdown = render_live_smoke_mainline_markdown(readiness)
+    assert "Decision: `ready-for-main`" in markdown
+
+
+def test_live_smoke_mainline_readiness_requires_acknowledgement_on_main(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive", "gdrive")
+    release_gate_path = _write_release_gate(tmp_path, "gdrive", "gdrive")
+
+    readiness = build_live_smoke_mainline_readiness(
+        matrix_summary_path=matrix_summary_path,
+        release_gate_path=release_gate_path,
+        checklist_path=Path("MILESTONE_5B_CLOSEOUT_CHECKLIST.md"),
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+        github_ref="refs/heads/main",
+        github_sha="abc123",
+        github_event_name="workflow_dispatch",
+        mainline_ack="",
+    )
+
+    assert readiness.merge_ready is True
+    assert readiness.mainline_eligible is True
+    assert readiness.mainline_ready is False
+    assert readiness.decision == "hold"
+    assert any("acknowledgement" in reason.lower() for reason in readiness.reasons)
+
+
+def test_live_smoke_mainline_readiness_blocks_main_promotion_when_manual_review_is_required(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "dropbox", "rate_limited", "rate_limit_test", 1)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive,dropbox", "gdrive")
+    release_gate_path = _write_release_gate(tmp_path, "gdrive,dropbox", "gdrive")
+
+    readiness = build_live_smoke_mainline_readiness(
+        matrix_summary_path=matrix_summary_path,
+        release_gate_path=release_gate_path,
+        checklist_path=Path("MILESTONE_5B_CLOSEOUT_CHECKLIST.md"),
+        runbook_path=Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md"),
+        github_ref="refs/heads/main",
+        github_sha="abc123",
+        github_event_name="workflow_dispatch",
+        mainline_ack="PROMOTE_MAIN",
+    )
+
+    assert readiness.merge_ready is True
+    assert readiness.mainline_eligible is False
+    assert readiness.mainline_ready is False
+    assert readiness.decision == "hold"
+    assert readiness.failed_optional_providers == ["dropbox"]
+    assert any("optional provider failures" in reason.lower() for reason in readiness.reasons)
+
+
+def test_live_smoke_mainline_readiness_script_writes_bundle_and_enforces_main_guardrails(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    matrix_summary_path = _write_matrix_summary(tmp_path, "gdrive", "gdrive")
+    release_gate_path = _write_release_gate(tmp_path, "gdrive", "gdrive")
+    out_dir = tmp_path / "mainline_out"
+
+    exit_code = live_smoke_mainline_readiness_main(
+        [
+            "--matrix-summary",
+            str(matrix_summary_path),
+            "--release-gate",
+            str(release_gate_path),
+            "--out-dir",
+            str(out_dir),
+            "--runbook-path",
+            str(Path("LIVE_SMOKE_OPERATOR_RUNBOOK.md")),
+            "--checklist-path",
+            str(Path("MILESTONE_5B_CLOSEOUT_CHECKLIST.md")),
+            "--github-ref",
+            "refs/heads/main",
+            "--github-sha",
+            "abc123",
+            "--github-event-name",
+            "workflow_dispatch",
+            "--mainline-ack",
+            "PROMOTE_MAIN",
+            "--enforce-main-guardrails",
+        ]
+    )
+
+    assert exit_code == 0
+    readiness_payload = json.loads((out_dir / "live_smoke_mainline_readiness.json").read_text(encoding="utf-8"))
+    bundle_payload = json.loads((out_dir / "live_smoke_release_bundle.json").read_text(encoding="utf-8"))
+    assert readiness_payload["decision"] == "ready-for-main"
+    assert bundle_payload["status"]["mainline_ready"] is True
+    markdown = (out_dir / "live_smoke_mainline_readiness.md").read_text(encoding="utf-8")
+    assert "Mainline ready: `true`" in markdown
