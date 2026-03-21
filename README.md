@@ -328,3 +328,22 @@ Example:
 ```powershell
 python .\scripts\build_relationship_memory.py --ingestion-path .\out\ingestion\ingestion-events.jsonl --out-dir .\out\relationship_memory
 ```
+
+
+## Milestone 5C block 3: review decision application and matched/approved state transitions
+
+This stage takes the operator review queue from Block 2 and adds the first deterministic review-application layer.
+
+It adds:
+- a secret-safe review decision journal
+- matched and approved state transition scaffolding built from operator decisions
+- a post-review relationship-memory and queue refresh
+- machine-readable and markdown rollups for transition outcomes
+
+Example:
+
+```powershell
+python .\scripts\apply_review_decisions.py --ingestion-path .\out\ingestion\ingestion-events.jsonl --queue-path .\out\relationship_memory\operator_review_queue.json --decisions-path .\out\review\review_decisions.json --out-dir .\out\review\applied --actor-id operator-1
+```
+
+This remains additive. The original ingestion stream is not mutated in place. Instead, the stage writes a derived state projection and a decision journal so future approval and application workflows can remain explainable and auditable.

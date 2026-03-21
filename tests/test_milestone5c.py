@@ -1,8 +1,10 @@
 from __future__ import annotations
+
 import json
 import subprocess
 import sys
 from pathlib import Path
+
 from start_here_extractor.ingestion import (
     INGESTION_SCHEMA_VERSION,
     append_ingestion_record,
@@ -16,6 +18,13 @@ from start_here_extractor.relationship_memory import (
     build_operator_review_queue,
     build_relationship_memory_snapshot,
 )
+from start_here_extractor.review_decisions import (
+    REVIEW_DECISION_SCHEMA_VERSION,
+    STATE_TRANSITION_ROLLUP_SCHEMA_VERSION,
+    apply_review_decisions,
+)
+
+
 def sample_inventory_record() -> dict:
     return {
         "schema_version": "4.2",
@@ -59,9 +68,33 @@ def sample_inventory_record() -> dict:
         "monitoring_ref": "monitoring:///tmp/monitoring.jsonl#event-1",
         "warnings": ["provider-needs-review"],
     }
+
+
+def sample_dropbox_inventory_record() -> dict:
+    record = sample_inventory_record()
+    record["provenance"] = {
+        "source_type": "dropbox",
+        "remote_id": "dropbox-file-1",
+        "etag": "etag-2",
+        "fetched_at": "2026-03-21T00:01:00+00:00",
+    }
+    return record
+
+
+def build_sample_ingestion_record(inventory_ref: str = "file:///tmp/example.inventory.jsonl") -> dict:
+    return build_ingestion_record(sample_inventory_record(), inventory_ref=inventory_ref)
+
+
+def build_sample_queue(record: dict | None = None) -> dict:
+    target = record or build_sample_ingestion_record()
+    _, suggestions = build_relationship_memory_snapshot([target])
+    return build_operator_review_queue([target], suggestions)
+
+
 def test_build_ingestion_record_preserves_generic_backbone_fields():
     inventory = sample_inventory_record()
     record = build_ingestion_record(inventory, inventory_ref="file:///tmp/example.inventory.jsonl")
+
     assert record["schema_version"] == INGESTION_SCHEMA_VERSION
     assert record["source"]["source_type"] == "gdrive"
     assert record["source"]["source_record_id"] == "drive-file-1"
@@ -72,25 +105,40 @@ def test_build_ingestion_record_preserves_generic_backbone_fields():
     assert record["pipeline"]["applied"]["status"] == "pending"
     assert record["governance"]["review_required"] is True
     assert record["evidence"]["inventory_ref"] == "file:///tmp/example.inventory.jsonl"
+
+
+
 def test_build_ingestion_record_event_id_is_deterministic():
     inventory = sample_inventory_record()
     one = build_ingestion_record(inventory, inventory_ref="file:///tmp/a.jsonl")
     two = build_ingestion_record(inventory, inventory_ref="file:///tmp/b.jsonl")
+
     assert one["event_id"] == two["event_id"]
+
+
+
 def test_append_and_iter_ingestion_records(tmp_path: Path):
-    record = build_ingestion_record(sample_inventory_record(), inventory_ref="file:///tmp/example.inventory.jsonl")
+    record = build_sample_ingestion_record()
     ref = append_ingestion_record(record, tmp_path)
     rows = list(iter_ingestion_records(tmp_path / "ingestion-events.jsonl"))
+
     assert ref.startswith("ingestion://")
     assert len(rows) == 1
     assert rows[0]["event_id"] == record["event_id"]
+
+
+
 def test_build_ingestion_rollup_counts_review_and_pipeline_statuses():
-    record = build_ingestion_record(sample_inventory_record(), inventory_ref="file:///tmp/example.inventory.jsonl")
+    record = build_sample_ingestion_record()
     rollup = build_ingestion_rollup([record])
+
     assert rollup["record_count"] == 1
     assert rollup["source_types"] == {"gdrive": 1}
     assert rollup["pipeline_status_counts"]["matched"]["pending"] == 1
     assert rollup["review_required_count"] == 1
+
+
+
 def test_build_ingestion_journal_script_writes_journal_and_rollup(tmp_path: Path):
     inventory_path = tmp_path / "sample.inventory.jsonl"
     inventory_path.write_text(json.dumps(sample_inventory_record()) + "\n", encoding="utf-8")
@@ -111,6 +159,7 @@ def test_build_ingestion_journal_script_writes_journal_and_rollup(tmp_path: Path
         capture_output=True,
         text=True,
     )
+
     assert proc.returncode == 0, proc.stderr
     journal_path = out_dir / "ingestion-events.jsonl"
     rollup_path = out_dir / "ingestion_rollup.json"
@@ -119,19 +168,17 @@ def test_build_ingestion_journal_script_writes_journal_and_rollup(tmp_path: Path
     rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
     assert rollup["record_count"] == 1
     assert rollup["source_types"] == {"gdrive": 1}
-def sample_dropbox_inventory_record() -> dict:
-    record = sample_inventory_record()
-    record["provenance"] = {
-        "source_type": "dropbox",
-        "remote_id": "dropbox-file-1",
-        "etag": "etag-2",
-        "fetched_at": "2026-03-21T00:01:00+00:00",
-    }
-    return record
+
+
+
 def test_build_relationship_memory_snapshot_groups_shared_fingerprints_across_sources():
-    drive_record = build_ingestion_record(sample_inventory_record(), inventory_ref="file:///tmp/drive.inventory.jsonl")
-    dropbox_record = build_ingestion_record(sample_dropbox_inventory_record(), inventory_ref="file:///tmp/dropbox.inventory.jsonl")
+    drive_record = build_sample_ingestion_record("file:///tmp/drive.inventory.jsonl")
+    dropbox_record = build_ingestion_record(
+        sample_dropbox_inventory_record(),
+        inventory_ref="file:///tmp/dropbox.inventory.jsonl",
+    )
     snapshot, suggestions = build_relationship_memory_snapshot([drive_record, dropbox_record])
+
     assert snapshot["schema_version"] == RELATIONSHIP_MEMORY_SCHEMA_VERSION
     assert snapshot["entity_count"] == 1
     entity = snapshot["entities"][0]
@@ -139,10 +186,14 @@ def test_build_relationship_memory_snapshot_groups_shared_fingerprints_across_so
     assert {item["source_type"] for item in entity["evidence_refs"]} == {"gdrive", "dropbox"}
     assert suggestions[drive_record["event_id"]]["entity_id"] == suggestions[dropbox_record["event_id"]]["entity_id"]
     assert suggestions[drive_record["event_id"]]["confidence"] >= 0.9
+
+
+
 def test_build_operator_review_queue_creates_high_priority_item_for_review_required_record():
-    record = build_ingestion_record(sample_inventory_record(), inventory_ref="file:///tmp/example.inventory.jsonl")
+    record = build_sample_ingestion_record()
     _, suggestions = build_relationship_memory_snapshot([record])
     queue = build_operator_review_queue([record], suggestions)
+
     assert queue["schema_version"] == REVIEW_QUEUE_SCHEMA_VERSION
     assert queue["item_count"] == 1
     item = queue["items"][0]
@@ -152,14 +203,21 @@ def test_build_operator_review_queue_creates_high_priority_item_for_review_requi
     assert "approval_pending" in item["reason_codes"]
     assert item["next_pipeline_stage"] == "matched"
     assert item["suggested_match"]["entity_id"].startswith("entity-")
+
+
+
 def test_relationship_memory_snapshot_redacts_secret_bearing_fields():
-    record = build_ingestion_record(sample_inventory_record(), inventory_ref="file:///tmp/example.inventory.jsonl")
+    record = build_sample_ingestion_record()
     record["relationship_memory"]["candidates"] = [{"access_token": "secret", "label": "candidate"}]
     snapshot, suggestions = build_relationship_memory_snapshot([record])
     queue = build_operator_review_queue([record], suggestions)
     payload = json.dumps({"snapshot": snapshot, "queue": queue}, sort_keys=True)
+
     assert "access_token" not in payload
     assert "secret" not in payload
+
+
+
 def test_build_relationship_memory_script_writes_snapshot_and_queue(tmp_path: Path):
     inventory_path = tmp_path / "sample.inventory.jsonl"
     inventory_path.write_text(json.dumps(sample_inventory_record()) + "\n", encoding="utf-8")
@@ -182,6 +240,7 @@ def test_build_relationship_memory_script_writes_snapshot_and_queue(tmp_path: Pa
         text=True,
     )
     assert journal_proc.returncode == 0, journal_proc.stderr
+
     proc = subprocess.run(
         [
             sys.executable,
@@ -196,6 +255,7 @@ def test_build_relationship_memory_script_writes_snapshot_and_queue(tmp_path: Pa
         capture_output=True,
         text=True,
     )
+
     assert proc.returncode == 0, proc.stderr
     snapshot_path = out_dir / "relationship_memory.json"
     queue_path = out_dir / "operator_review_queue.json"
@@ -207,3 +267,210 @@ def test_build_relationship_memory_script_writes_snapshot_and_queue(tmp_path: Pa
     queue = json.loads(queue_path.read_text(encoding="utf-8"))
     assert snapshot["entity_count"] == 1
     assert queue["item_count"] == 1
+
+
+
+def test_apply_review_decisions_accepts_suggested_match_and_advances_to_approval():
+    record = build_sample_ingestion_record()
+    queue = build_sample_queue(record)
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "match_action": "accept_suggested",
+            "decision_by": "operator-1",
+            "reason": "Accept strong fingerprint match",
+        }
+    ]
+
+    updated_records, decision_journal, rollup, _, post_queue = apply_review_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-1",
+    )
+
+    assert decision_journal[0]["schema_version"] == REVIEW_DECISION_SCHEMA_VERSION
+    updated = updated_records[0]
+    assert updated["pipeline"]["matched"]["status"] == "matched"
+    assert updated["pipeline"]["matched"]["entity_id"] == item["suggested_match"]["entity_id"]
+    assert updated["pipeline"]["approved"]["status"] == "pending"
+    assert updated["governance"]["review_state"] == "open"
+    assert updated["governance"]["review_required"] is True
+    assert rollup["schema_version"] == STATE_TRANSITION_ROLLUP_SCHEMA_VERSION
+    assert rollup["matched_status_counts"]["matched"] == 1
+    assert rollup["review_queue"]["after_count"] == 1
+    assert post_queue["item_count"] == 1
+    assert post_queue["items"][0]["next_pipeline_stage"] == "approved"
+
+
+
+def test_apply_review_decisions_can_resolve_match_and_approval_together():
+    record = build_sample_ingestion_record()
+    queue = build_sample_queue(record)
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "match_action": "accept_suggested",
+            "approval_action": "approve",
+            "decision_by": "operator-2",
+            "reason": "Approved after review",
+        }
+    ]
+
+    updated_records, decision_journal, rollup, _, post_queue = apply_review_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-2",
+    )
+
+    updated = updated_records[0]
+    assert updated["pipeline"]["matched"]["status"] == "matched"
+    assert updated["pipeline"]["approved"]["status"] == "approved"
+    assert updated["pipeline"]["approved"]["approved_by"] == "operator-2"
+    assert updated["governance"]["review_state"] == "resolved"
+    assert updated["governance"]["review_required"] is False
+    assert decision_journal[0]["result"]["review_state"] == "resolved"
+    assert rollup["review_state_counts"]["resolved"] == 1
+    assert rollup["review_queue"]["after_count"] == 0
+    assert post_queue["item_count"] == 0
+
+
+
+def test_apply_review_decisions_supports_no_match_resolution():
+    record = build_sample_ingestion_record()
+    queue = build_sample_queue(record)
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "match_action": "no_match",
+            "decision_by": "operator-3",
+            "reason": "Source artifact should remain unmatched",
+        }
+    ]
+
+    updated_records, decision_journal, rollup, _, post_queue = apply_review_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-3",
+    )
+
+    updated = updated_records[0]
+    assert updated["pipeline"]["matched"]["status"] == "no_match"
+    assert updated["pipeline"]["approved"]["status"] == "not_applicable"
+    assert updated["governance"]["review_state"] == "resolved"
+    assert decision_journal[0]["decision_by"] == "operator-3"
+    assert rollup["approved_status_counts"]["not_applicable"] == 1
+    assert post_queue["item_count"] == 0
+
+
+
+def test_apply_review_decisions_script_writes_projection_and_post_review_queue(tmp_path: Path):
+    inventory_path = tmp_path / "sample.inventory.jsonl"
+    inventory_path.write_text(json.dumps(sample_inventory_record()) + "\n", encoding="utf-8")
+    ingestion_dir = tmp_path / "ingestion"
+    relationship_dir = tmp_path / "relationship"
+    decision_dir = tmp_path / "decisions"
+    decision_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = tmp_path / "reviewed"
+
+    journal_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_ingestion_journal.py",
+            "--inventory-path",
+            str(inventory_path),
+            "--out-dir",
+            str(ingestion_dir),
+            "--source-system",
+            "gdrive",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert journal_proc.returncode == 0, journal_proc.stderr
+
+    queue_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_relationship_memory.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--out-dir",
+            str(relationship_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert queue_proc.returncode == 0, queue_proc.stderr
+
+    queue = json.loads((relationship_dir / "operator_review_queue.json").read_text(encoding="utf-8"))
+    item = queue["items"][0]
+    decisions_path = decision_dir / "review_decisions.json"
+    decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "queue_item_id": item["queue_item_id"],
+                        "match_action": "accept_suggested",
+                        "approval_action": "approve",
+                        "decision_by": "operator-4",
+                        "reason": "Approved in fixture test",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_review_decisions.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--queue-path",
+            str(relationship_dir / "operator_review_queue.json"),
+            "--decisions-path",
+            str(decisions_path),
+            "--out-dir",
+            str(out_dir),
+            "--actor-id",
+            "operator-4",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    projection_path = out_dir / "ingestion_state_projection.jsonl"
+    journal_path = out_dir / "review_decision_journal.jsonl"
+    rollup_path = out_dir / "state_transition_rollup.json"
+    post_queue_path = out_dir / "operator_review_queue_post_review.json"
+    post_queue_md_path = out_dir / "operator_review_queue_post_review.md"
+    assert projection_path.exists()
+    assert journal_path.exists()
+    assert rollup_path.exists()
+    assert post_queue_path.exists()
+    assert post_queue_md_path.exists()
+
+    projected_records = [json.loads(line) for line in projection_path.read_text(encoding="utf-8").splitlines() if line]
+    rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+    post_queue = json.loads(post_queue_path.read_text(encoding="utf-8"))
+    assert projected_records[0]["pipeline"]["approved"]["status"] == "approved"
+    assert rollup["review_queue"]["after_count"] == 0
+    assert post_queue["item_count"] == 0

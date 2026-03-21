@@ -301,10 +301,12 @@ def build_operator_review_queue(records: list[dict], suggestions: dict[str, dict
         suggestion = redact_sensitive_fields(dict(suggestions.get(event_id) or {}))
         confidence = float(suggestion.get("confidence") or 0.0)
         reason_codes = _reason_codes(record, confidence, [record] * int(suggestion.get("component_record_count") or 1))
-        should_queue = bool(governance.get("review_required")) or matched_status != "matched" or approved_status != "approved"
+        unresolved_match = matched_status in {"pending", "needs_review"}
+        unresolved_approval = approved_status in {"pending", "needs_review"}
+        should_queue = bool(governance.get("review_required")) or unresolved_match or unresolved_approval
         if not should_queue:
             continue
-        next_stage = "matched" if matched_status != "matched" else "approved"
+        next_stage = "matched" if unresolved_match else "approved"
         source = record.get("source") if isinstance(record.get("source"), dict) else {}
         evidence = record.get("evidence") if isinstance(record.get("evidence"), dict) else {}
         item = {
