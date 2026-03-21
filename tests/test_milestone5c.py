@@ -51,6 +51,16 @@ from start_here_extractor.adapter_runners import (
     build_adapter_runner_job_artifacts,
     collect_adapter_execution_outcomes,
 )
+from start_here_extractor.adapter_runner_interfaces import (
+    ADAPTER_RUNNER_INTERFACE_CONTRACTS_SCHEMA_VERSION,
+    ADAPTER_RUNNER_INTERFACE_REVIEW_QUEUE_SCHEMA_VERSION,
+    ADAPTER_RUNNER_INTERFACE_ROLLUP_SCHEMA_VERSION,
+    NORMALIZED_EXTERNAL_OUTCOMES_SCHEMA_VERSION,
+    COLLECTOR_NORMALIZATION_REVIEW_QUEUE_SCHEMA_VERSION,
+    COLLECTOR_NORMALIZATION_ROLLUP_SCHEMA_VERSION,
+    build_runner_interface_artifacts,
+    normalize_external_runner_outcomes,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -176,6 +186,25 @@ def sample_runner_catalog() -> list[dict]:
             "supported_adapter_families": ["ledger"],
             "supported_execution_modes": ["dry_run", "execute"],
             "supported_target_systems": ["ops-core"],
+            "supported_operations": ["upsert-evidence-record"],
+        }
+    ]
+
+
+def sample_runner_interface_catalog() -> list[dict]:
+    return [
+        {
+            "interface_key": "ops-core-json-envelope-interface",
+            "interface_family": "runner-interface-stub",
+            "interface_version": "1.0",
+            "outbound_contract_kind": "runner-job-envelope-v1",
+            "result_contract_kind": "runner-json-envelope-v1",
+            "normalizer_key": "json-envelope-v1",
+            "supported_runner_families": ["job-stub"],
+            "supported_dispatch_transports": ["json-envelope"],
+            "supported_stub_kinds": ["json-envelope"],
+            "supported_target_systems": ["ops-core"],
+            "supported_adapter_families": ["ledger"],
             "supported_operations": ["upsert-evidence-record"],
         }
     ]
@@ -1522,3 +1551,170 @@ def test_adapter_runner_and_external_outcome_scripts_write_expected_artifacts(tm
     assert decisions_doc["decisions"][0]["outcome_action"] == "dry_run_success"
     assert review_queue["item_count"] == 0
     assert rollup["outcome_action_counts"]["dry_run_success"] == 1
+
+
+def build_sample_runner_interface_contracts_doc() -> dict:
+    jobs_doc = build_sample_runner_jobs_doc()
+    contracts_doc, review_queue, _ = build_runner_interface_artifacts(jobs_doc, sample_runner_interface_catalog())
+    assert review_queue["item_count"] == 0
+    assert contracts_doc["contract_count"] == 1
+    return contracts_doc
+
+
+def test_build_runner_interface_artifacts_creates_stubbed_interface_contract():
+    jobs_doc = build_sample_runner_jobs_doc()
+    contracts_doc, review_queue, rollup = build_runner_interface_artifacts(jobs_doc, sample_runner_interface_catalog())
+
+    assert contracts_doc["schema_version"] == ADAPTER_RUNNER_INTERFACE_CONTRACTS_SCHEMA_VERSION
+    assert contracts_doc["contract_count"] == 1
+    contract = contracts_doc["contracts"][0]
+    assert contract["state"] == "stubbed"
+    assert contract["interface"]["interface_key"] == "ops-core-json-envelope-interface"
+    assert contract["collector_contract"]["normalizer_key"] == "json-envelope-v1"
+    assert review_queue["schema_version"] == ADAPTER_RUNNER_INTERFACE_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == ADAPTER_RUNNER_INTERFACE_ROLLUP_SCHEMA_VERSION
+    assert rollup["interface_family_counts"]["runner-interface-stub"] == 1
+
+
+
+def test_build_runner_interface_artifacts_creates_review_queue_when_interface_missing():
+    jobs_doc = build_sample_runner_jobs_doc()
+    contracts_doc, review_queue, rollup = build_runner_interface_artifacts(jobs_doc, [])
+
+    assert contracts_doc["contract_count"] == 0
+    assert review_queue["item_count"] == 1
+    item = review_queue["items"][0]
+    assert "no_runner_interface_match" in item["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_normalize_external_runner_outcomes_creates_canonical_outcome():
+    contracts_doc = build_sample_runner_interface_contracts_doc()
+    contract = contracts_doc["contracts"][0]
+    payloads = [
+        {
+            "runner_job_id": contract["runner_job_id"],
+            "status": "completed",
+            "executed_by": "runner-worker-8",
+            "completed_at": "2026-03-21T11:00:00+00:00",
+            "message": "Runner interface stub completed",
+            "result_ref": "job-result-001",
+        }
+    ]
+
+    outcomes_doc, review_queue, rollup = normalize_external_runner_outcomes(contracts_doc, payloads, actor_id="collector-8")
+
+    assert outcomes_doc["schema_version"] == NORMALIZED_EXTERNAL_OUTCOMES_SCHEMA_VERSION
+    assert outcomes_doc["outcome_count"] == 1
+    outcome = outcomes_doc["outcomes"][0]
+    assert outcome["outcome_status"] == "success"
+    assert outcome["normalizer_key"] == "json-envelope-v1"
+    assert outcome["runner_job_id"] == contract["runner_job_id"]
+    assert review_queue["schema_version"] == COLLECTOR_NORMALIZATION_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == COLLECTOR_NORMALIZATION_ROLLUP_SCHEMA_VERSION
+    assert rollup["outcome_status_counts"]["success"] == 1
+
+
+
+def test_normalize_external_runner_outcomes_queues_unmatched_payload():
+    contracts_doc = build_sample_runner_interface_contracts_doc()
+    payloads = [{"runner_job_id": "runner-job-missing", "status": "completed"}]
+
+    outcomes_doc, review_queue, rollup = normalize_external_runner_outcomes(contracts_doc, payloads, actor_id="collector-9")
+
+    assert outcomes_doc["outcome_count"] == 0
+    assert review_queue["item_count"] == 1
+    item = review_queue["items"][0]
+    assert "no_matching_interface_contract" in item["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_runner_interface_and_normalization_scripts_write_expected_artifacts(tmp_path: Path):
+    jobs_path = tmp_path / "adapter_runner_jobs.json"
+    jobs_path.write_text(json.dumps(build_sample_runner_jobs_doc(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    interface_catalog_path = tmp_path / "runner_interface_catalog.json"
+    interface_catalog_path.write_text(
+        json.dumps({"interfaces": sample_runner_interface_catalog()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    interface_dir = tmp_path / "runner_interface"
+    normalized_dir = tmp_path / "normalized_outcomes"
+
+    iface_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_runner_interface_contracts.py",
+            "--runner-jobs-path",
+            str(jobs_path),
+            "--interface-catalog-path",
+            str(interface_catalog_path),
+            "--out-dir",
+            str(interface_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert iface_proc.returncode == 0, iface_proc.stderr
+
+    interface_doc = json.loads((interface_dir / "adapter_runner_interface_contracts.json").read_text(encoding="utf-8"))
+    payloads_path = tmp_path / "raw_external_payloads.json"
+    payloads_path.write_text(
+        json.dumps(
+            {
+                "payloads": [
+                    {
+                        "runner_job_id": interface_doc["contracts"][0]["runner_job_id"],
+                        "status": "completed",
+                        "executed_by": "runner-worker-script",
+                        "completed_at": "2026-03-21T11:05:00+00:00",
+                        "message": "Runner stub completed",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    normalize_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/normalize_external_runner_outcomes.py",
+            "--interface-contracts-path",
+            str(interface_dir / "adapter_runner_interface_contracts.json"),
+            "--payloads-path",
+            str(payloads_path),
+            "--out-dir",
+            str(normalized_dir),
+            "--actor-id",
+            "collector-script-8",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert normalize_proc.returncode == 0, normalize_proc.stderr
+    outcomes_path = normalized_dir / "normalized_external_runner_outcomes.json"
+    review_queue_path = normalized_dir / "collector_normalization_review_queue.json"
+    rollup_path = normalized_dir / "collector_normalization_rollup.json"
+    assert outcomes_path.exists()
+    assert review_queue_path.exists()
+    assert rollup_path.exists()
+
+    outcomes_doc = json.loads(outcomes_path.read_text(encoding="utf-8"))
+    review_queue = json.loads(review_queue_path.read_text(encoding="utf-8"))
+    rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+    assert outcomes_doc["outcome_count"] == 1
+    assert outcomes_doc["outcomes"][0]["outcome_status"] == "success"
+    assert review_queue["item_count"] == 0
+    assert rollup["outcome_status_counts"]["success"] == 1

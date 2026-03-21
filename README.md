@@ -411,3 +411,26 @@ The companion `scripts/collect_adapter_execution_outcomes.py` helper turns exter
 - `external_outcome_rollup.md`
 
 This keeps execution target-neutral while adding a clean bridge from planned contracts to runnable jobs and then back from external outcomes into deterministic internal decisions.
+
+## M5C Block 8 runner interfaces and collector normalization contracts
+
+The `scripts/build_runner_interface_contracts.py` helper turns adapter runner jobs into stable runner-interface contracts using an external interface catalog. It writes:
+
+- `adapter_runner_interface_contracts.json`
+- `adapter_runner_interface_contracts.md`
+- `adapter_runner_interface_review_queue.json`
+- `adapter_runner_interface_review_queue.md`
+- `adapter_runner_interface_rollup.json`
+- `adapter_runner_interface_rollup.md`
+
+The `scripts/normalize_external_runner_outcomes.py` helper takes raw external runner payloads plus those interface contracts and normalizes them into one canonical collector shape. It writes:
+
+- `normalized_external_runner_outcomes.json`
+- `normalized_external_runner_outcomes.md`
+- `collector_normalization_review_queue.json`
+- `collector_normalization_review_queue.md`
+- `collector_normalization_rollup.json`
+- `collector_normalization_rollup.md`
+
+This creates a stable seam for future real runner adapters and downstream-specific result formats without changing the execution journal or evidence model.
+
