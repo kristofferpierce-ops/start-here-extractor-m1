@@ -434,3 +434,24 @@ The `scripts/normalize_external_runner_outcomes.py` helper takes raw external ru
 
 This creates a stable seam for future real runner adapters and downstream-specific result formats without changing the execution journal or evidence model.
 
+## M5C Block 9 target-family runner stubs and collector fixtures
+
+The `scripts/build_target_family_runner_stubs.py` helper turns runner-interface contracts into concrete target-family runner stubs using a target-family catalog. It writes:
+
+- `target_family_runner_stubs.json`
+- `target_family_runner_stubs.md`
+- `target_family_runner_review_queue.json`
+- `target_family_runner_review_queue.md`
+- `target_family_runner_rollup.json`
+- `target_family_runner_rollup.md`
+
+The companion `scripts/build_target_family_collector_fixtures.py` helper turns those target-family runner stubs into normalized collector fixtures for success, failure, defer, and skip flows. It writes:
+
+- `target_family_collector_fixtures.json`
+- `target_family_collector_fixtures.md`
+- `target_family_collector_fixture_review_queue.json`
+- `target_family_collector_fixture_review_queue.md`
+- `target_family_collector_fixture_rollup.json`
+- `target_family_collector_fixture_rollup.md`
+
+This creates concrete target-family scaffolding for future real adapters while keeping execution contract-driven, collector-friendly, and provenance-safe.

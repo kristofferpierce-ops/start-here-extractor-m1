@@ -61,6 +61,16 @@ from start_here_extractor.adapter_runner_interfaces import (
     build_runner_interface_artifacts,
     normalize_external_runner_outcomes,
 )
+from start_here_extractor.target_runner_families import (
+    TARGET_FAMILY_RUNNER_STUBS_SCHEMA_VERSION,
+    TARGET_FAMILY_RUNNER_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_FAMILY_RUNNER_ROLLUP_SCHEMA_VERSION,
+    TARGET_FAMILY_COLLECTOR_FIXTURES_SCHEMA_VERSION,
+    TARGET_FAMILY_COLLECTOR_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_FAMILY_COLLECTOR_ROLLUP_SCHEMA_VERSION,
+    build_target_family_runner_stub_artifacts,
+    build_target_family_collector_fixture_artifacts,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -206,6 +216,27 @@ def sample_runner_interface_catalog() -> list[dict]:
             "supported_target_systems": ["ops-core"],
             "supported_adapter_families": ["ledger"],
             "supported_operations": ["upsert-evidence-record"],
+        }
+    ]
+
+
+def sample_target_family_catalog() -> list[dict]:
+    return [
+        {
+            "target_family_key": "ops-core-ledger-family",
+            "target_family_name": "Ops Core Ledger Family",
+            "runner_stub_family": "ops-core-ledger-stub",
+            "fixture_family_key": "ops-core-ledger-fixtures",
+            "request_template_kind": "ops-core-ledger-request-v1",
+            "normalized_outcome_kind": "ops-core-ledger-outcome-v1",
+            "supported_interface_keys": ["ops-core-json-envelope-interface"],
+            "supported_target_systems": ["ops-core"],
+            "supported_target_types": ["evidence-ledger"],
+            "supported_adapter_families": ["ledger"],
+            "supported_runner_families": ["job-stub"],
+            "supported_operations": ["upsert-evidence-record"],
+            "supported_normalizer_keys": ["json-envelope-v1"],
+            "default_fixture_statuses": ["success", "failure", "defer", "skip"],
         }
     ]
 
@@ -1561,6 +1592,14 @@ def build_sample_runner_interface_contracts_doc() -> dict:
     return contracts_doc
 
 
+def build_sample_target_family_runner_stubs_doc() -> dict:
+    interface_contracts = build_sample_runner_interface_contracts_doc()
+    stubs_doc, review_queue, _ = build_target_family_runner_stub_artifacts(interface_contracts, sample_target_family_catalog())
+    assert review_queue["item_count"] == 0
+    assert stubs_doc["stub_count"] == 1
+    return stubs_doc
+
+
 def test_build_runner_interface_artifacts_creates_stubbed_interface_contract():
     jobs_doc = build_sample_runner_jobs_doc()
     contracts_doc, review_queue, rollup = build_runner_interface_artifacts(jobs_doc, sample_runner_interface_catalog())
@@ -1718,3 +1757,100 @@ def test_runner_interface_and_normalization_scripts_write_expected_artifacts(tmp
     assert outcomes_doc["outcomes"][0]["outcome_status"] == "success"
     assert review_queue["item_count"] == 0
     assert rollup["outcome_status_counts"]["success"] == 1
+
+
+def test_build_target_family_runner_stub_artifacts_creates_concrete_stub():
+    interface_contracts = build_sample_runner_interface_contracts_doc()
+    stubs_doc, review_queue, rollup = build_target_family_runner_stub_artifacts(interface_contracts, sample_target_family_catalog())
+
+    assert stubs_doc["schema_version"] == TARGET_FAMILY_RUNNER_STUBS_SCHEMA_VERSION
+    assert stubs_doc["stub_count"] == 1
+    stub = stubs_doc["stubs"][0]
+    assert stub["state"] == "stubbed"
+    assert stub["target_family"]["target_family_key"] == "ops-core-ledger-family"
+    assert stub["request_stub"]["template_kind"] == "ops-core-ledger-request-v1"
+    assert review_queue["schema_version"] == TARGET_FAMILY_RUNNER_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_FAMILY_RUNNER_ROLLUP_SCHEMA_VERSION
+    assert rollup["target_family_counts"]["ops-core-ledger-family"] == 1
+
+
+
+def test_build_target_family_runner_stub_artifacts_queues_missing_family():
+    interface_contracts = build_sample_runner_interface_contracts_doc()
+    stubs_doc, review_queue, rollup = build_target_family_runner_stub_artifacts(interface_contracts, [])
+
+    assert stubs_doc["stub_count"] == 0
+    assert review_queue["item_count"] == 1
+    assert "no_target_family_match" in review_queue["items"][0]["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_build_target_family_collector_fixture_artifacts_creates_family_fixtures():
+    stubs_doc = build_sample_target_family_runner_stubs_doc()
+    fixtures_doc, review_queue, rollup = build_target_family_collector_fixture_artifacts(stubs_doc)
+
+    assert fixtures_doc["schema_version"] == TARGET_FAMILY_COLLECTOR_FIXTURES_SCHEMA_VERSION
+    assert fixtures_doc["fixture_count"] == 4
+    assert {item["outcome_status"] for item in fixtures_doc["fixtures"]} == {"success", "failure", "defer", "skip"}
+    assert review_queue["schema_version"] == TARGET_FAMILY_COLLECTOR_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_FAMILY_COLLECTOR_ROLLUP_SCHEMA_VERSION
+    assert rollup["outcome_status_counts"]["success"] == 1
+
+
+
+def test_target_family_stub_and_fixture_scripts_write_expected_artifacts(tmp_path: Path):
+    interface_contracts_path = tmp_path / "adapter_runner_interface_contracts.json"
+    interface_contracts_path.write_text(
+        json.dumps(build_sample_runner_interface_contracts_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    target_family_catalog_path = tmp_path / "target_family_catalog.json"
+    target_family_catalog_path.write_text(
+        json.dumps({"target_families": sample_target_family_catalog()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    stubs_dir = tmp_path / "target_family_stubs"
+    fixtures_dir = tmp_path / "target_family_fixtures"
+
+    stubs_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_family_runner_stubs.py",
+            "--interface-contracts-path",
+            str(interface_contracts_path),
+            "--target-family-catalog-path",
+            str(target_family_catalog_path),
+            "--out-dir",
+            str(stubs_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert stubs_proc.returncode == 0, stubs_proc.stderr
+
+    fixtures_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_family_collector_fixtures.py",
+            "--target-runner-stubs-path",
+            str(stubs_dir / "target_family_runner_stubs.json"),
+            "--out-dir",
+            str(fixtures_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert fixtures_proc.returncode == 0, fixtures_proc.stderr
+
+    stubs_doc = json.loads((stubs_dir / "target_family_runner_stubs.json").read_text(encoding="utf-8"))
+    rollup = json.loads((fixtures_dir / "target_family_collector_fixture_rollup.json").read_text(encoding="utf-8"))
+    assert stubs_doc["stub_count"] == 1
+    assert rollup["outcome_status_counts"]["success"] == 1
+
