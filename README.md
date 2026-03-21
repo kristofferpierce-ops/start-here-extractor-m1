@@ -375,3 +375,17 @@ The `scripts/build_adapter_contracts.py` helper turns `applied` projection recor
 - `adapter_contract_rollup.md`
 
 This keeps downstream execution contract-driven and future-safe. Real target executors can be added later without mutating evidence, provenance, or operator decision history.
+
+## M5C Block 6 adapter execution journaling and outcome ingestion
+
+The `scripts/apply_adapter_execution_outcomes.py` helper takes planned adapter contracts plus a decision file and turns them into deterministic execution outcomes. It writes:
+
+- `ingestion_state_execution_projection.jsonl`
+- `adapter_execution_journal.jsonl`
+- `adapter_execution_journal.md`
+- `adapter_execution_contracts_post_execute.json`
+- `adapter_execution_contracts_post_execute.md`
+- `adapter_execution_rollup.json`
+- `adapter_execution_rollup.md`
+
+This keeps execution explainable and future-safe. Adapter outcomes are journaled separately, projected back into derived ingestion state, and can mark follow-up review without mutating raw evidence or provenance.

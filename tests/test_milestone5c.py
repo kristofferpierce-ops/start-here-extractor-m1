@@ -36,6 +36,11 @@ from start_here_extractor.adapter_contracts import (
     ADAPTER_EXECUTION_CONTRACTS_SCHEMA_VERSION,
     build_adapter_execution_artifacts,
 )
+from start_here_extractor.adapter_execution import (
+    ADAPTER_EXECUTION_JOURNAL_SCHEMA_VERSION,
+    ADAPTER_EXECUTION_ROLLUP_SCHEMA_VERSION,
+    apply_adapter_execution_outcomes,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -193,6 +198,13 @@ def build_sample_applied_record() -> dict:
     )
     assert post_queue["item_count"] == 0
     return updated_records[0]
+
+def build_sample_contracts_doc() -> dict:
+    record = build_sample_applied_record()
+    contracts_doc, review_queue, _ = build_adapter_execution_artifacts([record], sample_adapter_catalog())
+    assert review_queue["item_count"] == 0
+    assert contracts_doc["contract_count"] == 1
+    return contracts_doc
 
 
 def test_build_ingestion_record_preserves_generic_backbone_fields():
@@ -1029,3 +1041,294 @@ def test_build_adapter_contracts_script_writes_contracts_and_rollup(tmp_path: Pa
     assert contracts_doc["contract_count"] == 1
     assert review_queue["item_count"] == 0
     assert rollup["contract_count"] == 1
+
+
+def test_apply_adapter_execution_outcomes_updates_contract_and_ingests_dry_run_result():
+    record = build_sample_applied_record()
+    contracts_doc, _, _ = build_adapter_execution_artifacts([record], sample_adapter_catalog())
+    contract = contracts_doc["contracts"][0]
+    decisions = [
+        {
+            "contract_id": contract["contract_id"],
+            "outcome_action": "dry_run_success",
+            "executed_by": "adapter-runner-1",
+            "reason": "Validated contract payload without external side effects",
+            "external_ref": "dry-run-001",
+        }
+    ]
+
+    updated_records, updated_contracts_doc, journal, rollup = apply_adapter_execution_outcomes(
+        [record],
+        contracts_doc,
+        decisions,
+        actor_id="adapter-runner-1",
+    )
+
+    assert updated_contracts_doc["contract_count"] == 1
+    updated_contract = updated_contracts_doc["contracts"][0]
+    assert updated_contract["contract_state"] == "validated"
+    assert updated_contract["execution_status"] == "dry_run_succeeded"
+    assert updated_contract["execution_ref"].startswith("adapter-execution://adapter-exec-")
+    assert journal[0]["schema_version"] == ADAPTER_EXECUTION_JOURNAL_SCHEMA_VERSION
+    assert journal[0]["execution_status"] == "dry_run_succeeded"
+    updated_record = updated_records[0]
+    assert updated_record["pipeline"]["applied"]["execution_status"] == "dry_run_succeeded"
+    assert updated_record["pipeline"]["applied"]["adapter_contract_id"] == contract["contract_id"]
+    assert updated_record["governance"]["execution_followup_required"] is False
+    assert rollup["schema_version"] == ADAPTER_EXECUTION_ROLLUP_SCHEMA_VERSION
+    assert rollup["execution_status_counts"]["dry_run_succeeded"] == 1
+
+
+
+def test_apply_adapter_execution_outcomes_marks_failures_for_followup_review():
+    record = build_sample_applied_record()
+    contracts_doc, _, _ = build_adapter_execution_artifacts([record], sample_adapter_catalog())
+    contract = contracts_doc["contracts"][0]
+    decisions = [
+        {
+            "contract_id": contract["contract_id"],
+            "outcome_action": "execute_failure",
+            "executed_by": "adapter-runner-2",
+            "reason": "Downstream endpoint returned a retryable failure",
+            "status_code": "503",
+        }
+    ]
+
+    updated_records, updated_contracts_doc, journal, rollup = apply_adapter_execution_outcomes(
+        [record],
+        contracts_doc,
+        decisions,
+        actor_id="adapter-runner-2",
+    )
+
+    updated_contract = updated_contracts_doc["contracts"][0]
+    assert updated_contract["contract_state"] == "failed"
+    assert updated_contract["execution_status"] == "failed"
+    assert journal[0]["governance"]["followup_required"] is True
+    updated_record = updated_records[0]
+    assert updated_record["pipeline"]["applied"]["execution_status"] == "failed"
+    assert updated_record["governance"]["execution_followup_required"] is True
+    assert updated_record["governance"]["review_required"] is True
+    assert rollup["followup_required_count"] == 1
+    assert rollup["record_execution_status_counts"]["failed"] == 1
+
+
+
+def test_apply_adapter_execution_outcomes_script_writes_projection_journal_and_rollup(tmp_path: Path):
+    inventory_path = tmp_path / "sample.inventory.jsonl"
+    inventory_path.write_text(json.dumps(sample_inventory_record()) + "\n", encoding="utf-8")
+    ingestion_dir = tmp_path / "ingestion"
+    relationship_dir = tmp_path / "relationship"
+    review_dir = tmp_path / "reviewed"
+    apply_dir = tmp_path / "applied"
+    contract_dir = tmp_path / "contracts"
+    execute_dir = tmp_path / "executed"
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir(parents=True, exist_ok=True)
+
+    journal_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_ingestion_journal.py",
+            "--inventory-path",
+            str(inventory_path),
+            "--out-dir",
+            str(ingestion_dir),
+            "--source-system",
+            "gdrive",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert journal_proc.returncode == 0, journal_proc.stderr
+
+    queue_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_relationship_memory.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--out-dir",
+            str(relationship_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert queue_proc.returncode == 0, queue_proc.stderr
+
+    review_queue = json.loads((relationship_dir / "operator_review_queue.json").read_text(encoding="utf-8"))
+    review_item = review_queue["items"][0]
+    review_decisions_path = decisions_dir / "review_decisions.json"
+    review_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "queue_item_id": review_item["queue_item_id"],
+                        "match_action": "accept_suggested",
+                        "approval_action": "approve",
+                        "decision_by": "operator-exec-1",
+                        "reason": "Approve for execution outcome test",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    review_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_review_decisions.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--queue-path",
+            str(relationship_dir / "operator_review_queue.json"),
+            "--decisions-path",
+            str(review_decisions_path),
+            "--out-dir",
+            str(review_dir),
+            "--actor-id",
+            "operator-exec-1",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert review_proc.returncode == 0, review_proc.stderr
+
+    target_catalog_path = decisions_dir / "target_catalog.json"
+    target_catalog_path.write_text(json.dumps({"targets": sample_target_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    apply_decisions_path = decisions_dir / "application_decisions.json"
+    approved_event_id = json.loads((review_dir / "ingestion_state_projection.jsonl").read_text(encoding="utf-8").splitlines()[0])["event_id"]
+    apply_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "event_id": approved_event_id,
+                        "apply_action": "apply_suggested",
+                        "decision_by": "operator-exec-1",
+                        "reason": "Route approved record for adapter execution test",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_application_decisions.py",
+            "--ingestion-path",
+            str(review_dir / "ingestion_state_projection.jsonl"),
+            "--target-catalog-path",
+            str(target_catalog_path),
+            "--decisions-path",
+            str(apply_decisions_path),
+            "--out-dir",
+            str(apply_dir),
+            "--actor-id",
+            "operator-exec-1",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert apply_proc.returncode == 0, apply_proc.stderr
+
+    adapter_catalog_path = decisions_dir / "adapter_catalog.json"
+    adapter_catalog_path.write_text(json.dumps({"adapters": sample_adapter_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    contract_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_adapter_contracts.py",
+            "--ingestion-path",
+            str(apply_dir / "ingestion_state_applied_projection.jsonl"),
+            "--adapter-catalog-path",
+            str(adapter_catalog_path),
+            "--out-dir",
+            str(contract_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert contract_proc.returncode == 0, contract_proc.stderr
+
+    contracts_doc = json.loads((contract_dir / "adapter_execution_contracts.json").read_text(encoding="utf-8"))
+    contract_id = contracts_doc["contracts"][0]["contract_id"]
+    execution_decisions_path = decisions_dir / "adapter_execution_decisions.json"
+    execution_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "contract_id": contract_id,
+                        "outcome_action": "dry_run_success",
+                        "executed_by": "adapter-exec-1",
+                        "reason": "Validated the adapter contract in dry-run mode",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_adapter_execution_outcomes.py",
+            "--ingestion-path",
+            str(apply_dir / "ingestion_state_applied_projection.jsonl"),
+            "--contracts-path",
+            str(contract_dir / "adapter_execution_contracts.json"),
+            "--decisions-path",
+            str(execution_decisions_path),
+            "--out-dir",
+            str(execute_dir),
+            "--actor-id",
+            "adapter-exec-1",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    projection_path = execute_dir / "ingestion_state_execution_projection.jsonl"
+    journal_path = execute_dir / "adapter_execution_journal.jsonl"
+    contracts_path = execute_dir / "adapter_execution_contracts_post_execute.json"
+    rollup_path = execute_dir / "adapter_execution_rollup.json"
+    assert projection_path.exists()
+    assert journal_path.exists()
+    assert contracts_path.exists()
+    assert rollup_path.exists()
+
+    projected_records = [json.loads(line) for line in projection_path.read_text(encoding="utf-8").splitlines() if line]
+    journal_rows = [json.loads(line) for line in journal_path.read_text(encoding="utf-8").splitlines() if line]
+    contracts_doc = json.loads(contracts_path.read_text(encoding="utf-8"))
+    rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+    assert projected_records[0]["pipeline"]["applied"]["execution_status"] == "dry_run_succeeded"
+    assert projected_records[0]["governance"]["execution_followup_required"] is False
+    assert journal_rows[0]["execution_status"] == "dry_run_succeeded"
+    assert contracts_doc["contracts"][0]["contract_state"] == "validated"
+    assert rollup["execution_status_counts"]["dry_run_succeeded"] == 1
