@@ -113,6 +113,17 @@ from start_here_extractor.target_group_adapter_execution_harnesses import (
     build_replayable_dry_run_orchestration_pack_artifacts,
 )
 
+from start_here_extractor.target_group_adapter_promotion_readiness import (
+    TARGET_GROUP_PROMOTION_READINESS_PACKS_SCHEMA_VERSION,
+    TARGET_GROUP_PROMOTION_READINESS_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_GROUP_PROMOTION_READINESS_ROLLUP_SCHEMA_VERSION,
+    LIVE_INTEGRATION_CANDIDATE_PACKS_SCHEMA_VERSION,
+    LIVE_INTEGRATION_CANDIDATE_REVIEW_QUEUE_SCHEMA_VERSION,
+    LIVE_INTEGRATION_CANDIDATE_ROLLUP_SCHEMA_VERSION,
+    build_target_group_promotion_readiness_pack_artifacts,
+    build_live_integration_candidate_pack_artifacts,
+)
+
 from start_here_extractor.target_group_adapter_harness_results import (
     DRY_RUN_HARNESS_RESULT_JOURNALS_SCHEMA_VERSION,
     DRY_RUN_HARNESS_RESULT_REVIEW_QUEUE_SCHEMA_VERSION,
@@ -2810,3 +2821,115 @@ def test_dry_run_harness_result_and_replay_comparison_scripts_write_expected_art
     rollup = json.loads((comparison_dir / "replay_outcome_comparison_rollup.json").read_text(encoding="utf-8"))
     assert journals_doc["journal_count"] == 1
     assert rollup["comparison_outcome_counts"]["match"] == 4
+
+
+
+def build_sample_replay_outcome_comparison_packs_doc() -> dict:
+    journals_doc = build_sample_dry_run_harness_result_journals_doc()
+    harnesses_doc = build_sample_target_group_adapter_execution_harnesses_doc()
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+    orchestration_doc, orchestration_review_queue, _ = build_replayable_dry_run_orchestration_pack_artifacts(harnesses_doc, execution_packs_doc)
+    assert orchestration_review_queue["item_count"] == 0
+    packs_doc, review_queue, _ = build_replay_outcome_comparison_pack_artifacts(journals_doc, orchestration_doc)
+    assert review_queue["item_count"] == 0
+    assert packs_doc["pack_count"] == 1
+    return packs_doc
+
+
+def test_build_target_group_promotion_readiness_pack_artifacts_creates_ready_pack():
+    journals_doc = build_sample_dry_run_harness_result_journals_doc()
+    comparison_doc = build_sample_replay_outcome_comparison_packs_doc()
+
+    packs_doc, review_queue, rollup = build_target_group_promotion_readiness_pack_artifacts(journals_doc, comparison_doc)
+
+    assert packs_doc["schema_version"] == TARGET_GROUP_PROMOTION_READINESS_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert pack["state"] == "promotion-readiness-assessed"
+    assert pack["readiness_status"] == "promotion_ready"
+    assert pack["promotion_gate"]["comparison_clean"] is True
+    assert review_queue["schema_version"] == TARGET_GROUP_PROMOTION_READINESS_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_GROUP_PROMOTION_READINESS_ROLLUP_SCHEMA_VERSION
+    assert rollup["readiness_status_counts"]["promotion_ready"] == 1
+
+
+def test_build_live_integration_candidate_pack_artifacts_creates_candidate_pack():
+    journals_doc = build_sample_dry_run_harness_result_journals_doc()
+    comparison_doc = build_sample_replay_outcome_comparison_packs_doc()
+    readiness_doc, readiness_review_queue, _ = build_target_group_promotion_readiness_pack_artifacts(journals_doc, comparison_doc)
+    assert readiness_review_queue["item_count"] == 0
+
+    packs_doc, review_queue, rollup = build_live_integration_candidate_pack_artifacts(readiness_doc)
+
+    assert packs_doc["schema_version"] == LIVE_INTEGRATION_CANDIDATE_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert pack["state"] == "candidate-prepared"
+    assert pack["candidate_status"] == "ready_for_live_integration"
+    assert review_queue["schema_version"] == LIVE_INTEGRATION_CANDIDATE_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == LIVE_INTEGRATION_CANDIDATE_ROLLUP_SCHEMA_VERSION
+    assert rollup["candidate_status_counts"]["ready_for_live_integration"] == 1
+
+
+def test_promotion_readiness_and_live_candidate_scripts_write_expected_artifacts(tmp_path: Path):
+    journals_path = tmp_path / "dry_run_harness_result_journals.json"
+    journals_path.write_text(
+        json.dumps(build_sample_dry_run_harness_result_journals_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    comparison_path = tmp_path / "replay_outcome_comparison_packs.json"
+    comparison_path.write_text(
+        json.dumps(build_sample_replay_outcome_comparison_packs_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    readiness_dir = tmp_path / "promotion_readiness"
+    candidate_dir = tmp_path / "live_candidates"
+
+    readiness_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_group_promotion_readiness_packs.py",
+            "--dry-run-harness-result-journals-path",
+            str(journals_path),
+            "--replay-outcome-comparison-packs-path",
+            str(comparison_path),
+            "--out-dir",
+            str(readiness_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert readiness_proc.returncode == 0, readiness_proc.stderr
+
+    candidate_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_live_integration_candidate_packs.py",
+            "--target-group-promotion-readiness-packs-path",
+            str(readiness_dir / "target_group_promotion_readiness_packs.json"),
+            "--out-dir",
+            str(candidate_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert candidate_proc.returncode == 0, candidate_proc.stderr
+
+    packs_doc = json.loads((readiness_dir / "target_group_promotion_readiness_packs.json").read_text(encoding="utf-8"))
+    rollup = json.loads((candidate_dir / "live_integration_candidate_rollup.json").read_text(encoding="utf-8"))
+    assert packs_doc["pack_count"] == 1
+    assert rollup["candidate_status_counts"]["ready_for_live_integration"] == 1

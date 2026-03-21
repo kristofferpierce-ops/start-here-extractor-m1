@@ -558,3 +558,20 @@ Block 15 adds dry-run harness result journals and replay outcome comparison pack
 - `replay_outcome_comparison_packs.json`
 - `replay_outcome_comparison_review_queue.json`
 - `replay_outcome_comparison_rollup.json`
+
+
+## M5C Block 16
+
+Block 16 adds target-group promotion readiness packs and live integration candidate packs on top of the dry-run harness result and replay comparison layer. It keeps everything offline and contract-driven while marking which target-group flows are clean enough to move into a future explicit live integration milestone.
+
+### New scripts
+- `scripts/build_target_group_promotion_readiness_packs.py`
+- `scripts/build_live_integration_candidate_packs.py`
+
+### New artifacts
+- `target_group_promotion_readiness_packs.json`
+- `target_group_promotion_readiness_review_queue.json`
+- `target_group_promotion_readiness_rollup.json`
+- `live_integration_candidate_packs.json`
+- `live_integration_candidate_review_queue.json`
+- `live_integration_candidate_rollup.json`
