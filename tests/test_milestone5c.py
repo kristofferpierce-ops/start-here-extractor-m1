@@ -30,6 +30,12 @@ from start_here_extractor.application_decisions import (
     apply_application_decisions,
     build_application_queue,
 )
+from start_here_extractor.adapter_contracts import (
+    ADAPTER_CONTRACT_REVIEW_QUEUE_SCHEMA_VERSION,
+    ADAPTER_CONTRACT_ROLLUP_SCHEMA_VERSION,
+    ADAPTER_EXECUTION_CONTRACTS_SCHEMA_VERSION,
+    build_adapter_execution_artifacts,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -119,6 +125,31 @@ def sample_target_catalog() -> list[dict]:
     ]
 
 
+def sample_adapter_catalog() -> list[dict]:
+    return [
+        {
+            "adapter_key": "ops-core-evidence-upsert",
+            "adapter_family": "ledger",
+            "adapter_version": "1.0",
+            "contract_version": "1.0",
+            "operation": "upsert-evidence-record",
+            "execution_mode": "dry_run",
+            "target_key": "ops-evidence-ledger",
+            "target_system": "ops-core",
+            "target_type": "evidence-ledger",
+            "supported_content_families": ["start-here-evidence"],
+            "supported_source_types": ["gdrive", "dropbox"],
+            "required_fields": [
+                "event_id",
+                "source.source_record_id",
+                "evidence.inventory_ref",
+                "evidence.zip_sha256",
+                "pipeline.applied.target_key",
+            ],
+        }
+    ]
+
+
 def build_sample_approved_record() -> dict:
     record = build_sample_ingestion_record()
     queue = build_sample_queue(record)
@@ -137,6 +168,28 @@ def build_sample_approved_record() -> dict:
         queue,
         decisions,
         actor_id="operator-approved",
+    )
+    assert post_queue["item_count"] == 0
+    return updated_records[0]
+
+
+def build_sample_applied_record() -> dict:
+    record = build_sample_approved_record()
+    queue = build_application_queue([record], sample_target_catalog())
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "apply_action": "apply_suggested",
+            "decision_by": "operator-apply-ready",
+            "reason": "Prepare record for adapter contract tests",
+        }
+    ]
+    updated_records, _, _, post_queue = apply_application_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-apply-ready",
     )
     assert post_queue["item_count"] == 0
     return updated_records[0]
@@ -776,3 +829,203 @@ def test_apply_application_decisions_script_writes_projection_and_rollup(tmp_pat
     assert projected_records[0]["pipeline"]["applied"]["status"] == "applied"
     assert rollup["queue"]["after_count"] == 0
     assert post_queue["item_count"] == 0
+
+
+def test_build_adapter_execution_artifacts_for_applied_record_creates_planned_contract():
+    record = build_sample_applied_record()
+    contracts_doc, review_queue, rollup = build_adapter_execution_artifacts([record], sample_adapter_catalog())
+
+    assert contracts_doc["schema_version"] == ADAPTER_EXECUTION_CONTRACTS_SCHEMA_VERSION
+    assert contracts_doc["contract_count"] == 1
+    contract = contracts_doc["contracts"][0]
+    assert contract["contract_state"] == "planned"
+    assert contract["execution_mode"] == "dry_run"
+    assert contract["adapter"]["adapter_key"] == "ops-core-evidence-upsert"
+    assert contract["target"]["target_key"] == "ops-evidence-ledger"
+    assert review_queue["schema_version"] == ADAPTER_CONTRACT_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == ADAPTER_CONTRACT_ROLLUP_SCHEMA_VERSION
+    assert rollup["contract_count"] == 1
+
+
+
+def test_build_adapter_execution_artifacts_creates_review_queue_when_adapter_missing():
+    record = build_sample_applied_record()
+    contracts_doc, review_queue, rollup = build_adapter_execution_artifacts([record], [])
+
+    assert contracts_doc["contract_count"] == 0
+    assert review_queue["item_count"] == 1
+    item = review_queue["items"][0]
+    assert "no_adapter_match" in item["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_build_adapter_contracts_script_writes_contracts_and_rollup(tmp_path: Path):
+    inventory_path = tmp_path / "sample.inventory.jsonl"
+    inventory_path.write_text(json.dumps(sample_inventory_record()) + "\n", encoding="utf-8")
+    ingestion_dir = tmp_path / "ingestion"
+    relationship_dir = tmp_path / "relationship"
+    review_dir = tmp_path / "reviewed"
+    apply_dir = tmp_path / "applied"
+    contract_dir = tmp_path / "contracts"
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir(parents=True, exist_ok=True)
+
+    journal_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_ingestion_journal.py",
+            "--inventory-path",
+            str(inventory_path),
+            "--out-dir",
+            str(ingestion_dir),
+            "--source-system",
+            "gdrive",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert journal_proc.returncode == 0, journal_proc.stderr
+
+    queue_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_relationship_memory.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--out-dir",
+            str(relationship_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert queue_proc.returncode == 0, queue_proc.stderr
+
+    review_queue = json.loads((relationship_dir / "operator_review_queue.json").read_text(encoding="utf-8"))
+    review_item = review_queue["items"][0]
+    review_decisions_path = decisions_dir / "review_decisions.json"
+    review_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "queue_item_id": review_item["queue_item_id"],
+                        "match_action": "accept_suggested",
+                        "approval_action": "approve",
+                        "decision_by": "operator-contract-1",
+                        "reason": "Approved for adapter contract test",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    review_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_review_decisions.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--queue-path",
+            str(relationship_dir / "operator_review_queue.json"),
+            "--decisions-path",
+            str(review_decisions_path),
+            "--out-dir",
+            str(review_dir),
+            "--actor-id",
+            "operator-contract-1",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert review_proc.returncode == 0, review_proc.stderr
+
+    target_catalog_path = decisions_dir / "target_catalog.json"
+    target_catalog_path.write_text(json.dumps({"targets": sample_target_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    apply_decisions_path = decisions_dir / "application_decisions.json"
+    apply_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "event_id": build_sample_approved_record()["event_id"],
+                        "apply_action": "apply_suggested",
+                        "decision_by": "operator-contract-1",
+                        "reason": "Route approved record for adapter contract test",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    apply_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_application_decisions.py",
+            "--ingestion-path",
+            str(review_dir / "ingestion_state_projection.jsonl"),
+            "--target-catalog-path",
+            str(target_catalog_path),
+            "--decisions-path",
+            str(apply_decisions_path),
+            "--out-dir",
+            str(apply_dir),
+            "--actor-id",
+            "operator-contract-1",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert apply_proc.returncode == 0, apply_proc.stderr
+
+    adapter_catalog_path = decisions_dir / "adapter_catalog.json"
+    adapter_catalog_path.write_text(json.dumps({"adapters": sample_adapter_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_adapter_contracts.py",
+            "--ingestion-path",
+            str(apply_dir / "ingestion_state_applied_projection.jsonl"),
+            "--adapter-catalog-path",
+            str(adapter_catalog_path),
+            "--out-dir",
+            str(contract_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    contracts_path = contract_dir / "adapter_execution_contracts.json"
+    review_queue_path = contract_dir / "adapter_contract_review_queue.json"
+    rollup_path = contract_dir / "adapter_contract_rollup.json"
+    assert contracts_path.exists()
+    assert review_queue_path.exists()
+    assert rollup_path.exists()
+
+    contracts_doc = json.loads(contracts_path.read_text(encoding="utf-8"))
+    review_queue = json.loads(review_queue_path.read_text(encoding="utf-8"))
+    rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+    assert contracts_doc["contract_count"] == 1
+    assert review_queue["item_count"] == 0
+    assert rollup["contract_count"] == 1

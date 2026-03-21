@@ -362,3 +362,16 @@ The `scripts/apply_application_decisions.py` helper turns approved ingestion rec
 - `application_queue_post_apply.md`
 
 This keeps downstream apply behavior connector-neutral while preserving provenance, approval history, and explainable operator routing decisions.
+
+## M5C Block 5 adapter contract scaffolding
+
+The `scripts/build_adapter_contracts.py` helper turns `applied` projection records into explicit adapter execution contracts using an external adapter catalog. It writes:
+
+- `adapter_execution_contracts.json`
+- `adapter_execution_contracts.md`
+- `adapter_contract_review_queue.json`
+- `adapter_contract_review_queue.md`
+- `adapter_contract_rollup.json`
+- `adapter_contract_rollup.md`
+
+This keeps downstream execution contract-driven and future-safe. Real target executors can be added later without mutating evidence, provenance, or operator decision history.
