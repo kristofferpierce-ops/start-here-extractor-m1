@@ -23,6 +23,13 @@ from start_here_extractor.review_decisions import (
     STATE_TRANSITION_ROLLUP_SCHEMA_VERSION,
     apply_review_decisions,
 )
+from start_here_extractor.application_decisions import (
+    APPLICATION_DECISION_SCHEMA_VERSION,
+    APPLICATION_QUEUE_SCHEMA_VERSION,
+    APPLICATION_TRANSITION_ROLLUP_SCHEMA_VERSION,
+    apply_application_decisions,
+    build_application_queue,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -89,6 +96,50 @@ def build_sample_queue(record: dict | None = None) -> dict:
     target = record or build_sample_ingestion_record()
     _, suggestions = build_relationship_memory_snapshot([target])
     return build_operator_review_queue([target], suggestions)
+
+def sample_target_catalog() -> list[dict]:
+    return [
+        {
+            "target_key": "ops-evidence-ledger",
+            "target_type": "evidence-ledger",
+            "target_system": "ops-core",
+            "target_id": "ledger-primary",
+            "allowed_content_families": ["start-here-evidence"],
+            "allowed_source_types": ["gdrive", "dropbox"],
+            "apply_mode": "projection",
+        },
+        {
+            "target_key": "triage-backlog",
+            "target_type": "review-backlog",
+            "target_system": "ops-core",
+            "target_id": "backlog-1",
+            "allowed_content_families": ["start-here-evidence"],
+            "apply_mode": "projection",
+        },
+    ]
+
+
+def build_sample_approved_record() -> dict:
+    record = build_sample_ingestion_record()
+    queue = build_sample_queue(record)
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "match_action": "accept_suggested",
+            "approval_action": "approve",
+            "decision_by": "operator-approved",
+            "reason": "Approved for apply-stage tests",
+        }
+    ]
+    updated_records, _, _, _, post_queue = apply_review_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-approved",
+    )
+    assert post_queue["item_count"] == 0
+    return updated_records[0]
 
 
 def test_build_ingestion_record_preserves_generic_backbone_fields():
@@ -473,4 +524,255 @@ def test_apply_review_decisions_script_writes_projection_and_post_review_queue(t
     post_queue = json.loads(post_queue_path.read_text(encoding="utf-8"))
     assert projected_records[0]["pipeline"]["approved"]["status"] == "approved"
     assert rollup["review_queue"]["after_count"] == 0
+    assert post_queue["item_count"] == 0
+
+def test_build_application_queue_for_approved_record_suggests_target():
+    record = build_sample_approved_record()
+    queue = build_application_queue([record], sample_target_catalog())
+
+    assert queue["schema_version"] == APPLICATION_QUEUE_SCHEMA_VERSION
+    assert queue["item_count"] == 1
+    item = queue["items"][0]
+    assert item["next_pipeline_stage"] == "applied"
+    assert item["suggested_target"]["target_key"] == "ops-evidence-ledger"
+    assert "approved_pending_application" in item["reason_codes"]
+
+
+
+def test_apply_application_decisions_accepts_suggested_target_and_marks_applied():
+    record = build_sample_approved_record()
+    queue = build_application_queue([record], sample_target_catalog())
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "apply_action": "apply_suggested",
+            "decision_by": "operator-apply-1",
+            "reason": "Route to default ledger",
+        }
+    ]
+
+    updated_records, decision_journal, rollup, post_queue = apply_application_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-apply-1",
+    )
+
+    updated = updated_records[0]
+    assert decision_journal[0]["schema_version"] == APPLICATION_DECISION_SCHEMA_VERSION
+    assert updated["pipeline"]["applied"]["status"] == "applied"
+    assert updated["pipeline"]["applied"]["target_key"] == "ops-evidence-ledger"
+    assert updated["pipeline"]["applied"]["apply_mode"] == "projection"
+    assert updated["governance"]["application_state"] == "resolved"
+    assert updated["governance"]["application_required"] is False
+    assert rollup["schema_version"] == APPLICATION_TRANSITION_ROLLUP_SCHEMA_VERSION
+    assert rollup["applied_status_counts"]["applied"] == 1
+    assert post_queue["item_count"] == 0
+
+
+
+def test_apply_application_decisions_can_mark_not_applicable():
+    record = build_sample_approved_record()
+    queue = build_application_queue([record], sample_target_catalog())
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "apply_action": "not_applicable",
+            "decision_by": "operator-apply-2",
+            "reason": "No downstream sync is required",
+        }
+    ]
+
+    updated_records, _, rollup, post_queue = apply_application_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-apply-2",
+    )
+
+    updated = updated_records[0]
+    assert updated["pipeline"]["applied"]["status"] == "not_applicable"
+    assert updated["governance"]["application_state"] == "resolved"
+    assert rollup["applied_status_counts"]["not_applicable"] == 1
+    assert post_queue["item_count"] == 0
+
+
+
+def test_apply_application_decisions_defer_keeps_queue_open():
+    record = build_sample_approved_record()
+    queue = build_application_queue([record], sample_target_catalog())
+    item = queue["items"][0]
+    decisions = [
+        {
+            "queue_item_id": item["queue_item_id"],
+            "apply_action": "defer",
+            "decision_by": "operator-apply-3",
+            "reason": "Wait for downstream target readiness",
+        }
+    ]
+
+    updated_records, _, rollup, post_queue = apply_application_decisions(
+        [record],
+        queue,
+        decisions,
+        actor_id="operator-apply-3",
+    )
+
+    updated = updated_records[0]
+    assert updated["pipeline"]["applied"]["status"] == "pending"
+    assert updated["governance"]["application_state"] == "open"
+    assert rollup["queue"]["after_count"] == 1
+    assert post_queue["item_count"] == 1
+
+
+
+def test_apply_application_decisions_script_writes_projection_and_rollup(tmp_path: Path):
+    inventory_path = tmp_path / "sample.inventory.jsonl"
+    inventory_path.write_text(json.dumps(sample_inventory_record()) + "\n", encoding="utf-8")
+    ingestion_dir = tmp_path / "ingestion"
+    relationship_dir = tmp_path / "relationship"
+    review_dir = tmp_path / "reviewed"
+    apply_dir = tmp_path / "applied"
+    decisions_dir = tmp_path / "decisions"
+    decisions_dir.mkdir(parents=True, exist_ok=True)
+
+    journal_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_ingestion_journal.py",
+            "--inventory-path",
+            str(inventory_path),
+            "--out-dir",
+            str(ingestion_dir),
+            "--source-system",
+            "gdrive",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert journal_proc.returncode == 0, journal_proc.stderr
+
+    queue_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_relationship_memory.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--out-dir",
+            str(relationship_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert queue_proc.returncode == 0, queue_proc.stderr
+
+    queue = json.loads((relationship_dir / "operator_review_queue.json").read_text(encoding="utf-8"))
+    item = queue["items"][0]
+    review_decisions_path = decisions_dir / "review_decisions.json"
+    review_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "queue_item_id": item["queue_item_id"],
+                        "match_action": "accept_suggested",
+                        "approval_action": "approve",
+                        "decision_by": "operator-apply-4",
+                        "reason": "Approved before apply test",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    review_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_review_decisions.py",
+            "--ingestion-path",
+            str(ingestion_dir / "ingestion-events.jsonl"),
+            "--queue-path",
+            str(relationship_dir / "operator_review_queue.json"),
+            "--decisions-path",
+            str(review_decisions_path),
+            "--out-dir",
+            str(review_dir),
+            "--actor-id",
+            "operator-apply-4",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert review_proc.returncode == 0, review_proc.stderr
+
+    target_catalog_path = decisions_dir / "target_catalog.json"
+    target_catalog_path.write_text(json.dumps({"targets": sample_target_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    apply_decisions_path = decisions_dir / "application_decisions.json"
+    apply_decisions_path.write_text(
+        json.dumps(
+            {
+                "decisions": [
+                    {
+                        "event_id": build_sample_approved_record()["event_id"],
+                        "apply_action": "apply_suggested",
+                        "decision_by": "operator-apply-4",
+                        "reason": "Route approved record to default target",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/apply_application_decisions.py",
+            "--ingestion-path",
+            str(review_dir / "ingestion_state_projection.jsonl"),
+            "--target-catalog-path",
+            str(target_catalog_path),
+            "--decisions-path",
+            str(apply_decisions_path),
+            "--out-dir",
+            str(apply_dir),
+            "--actor-id",
+            "operator-apply-4",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    projection_path = apply_dir / "ingestion_state_applied_projection.jsonl"
+    journal_path = apply_dir / "application_decision_journal.jsonl"
+    rollup_path = apply_dir / "application_transition_rollup.json"
+    post_queue_path = apply_dir / "application_queue_post_apply.json"
+    assert projection_path.exists()
+    assert journal_path.exists()
+    assert rollup_path.exists()
+    assert post_queue_path.exists()
+
+    projected_records = [json.loads(line) for line in projection_path.read_text(encoding="utf-8").splitlines() if line]
+    rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+    post_queue = json.loads(post_queue_path.read_text(encoding="utf-8"))
+    assert projected_records[0]["pipeline"]["applied"]["status"] == "applied"
+    assert rollup["queue"]["after_count"] == 0
     assert post_queue["item_count"] == 0

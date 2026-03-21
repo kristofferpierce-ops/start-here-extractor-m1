@@ -347,3 +347,18 @@ python .\scripts\apply_review_decisions.py --ingestion-path .\out\ingestion\inge
 ```
 
 This remains additive. The original ingestion stream is not mutated in place. Instead, the stage writes a derived state projection and a decision journal so future approval and application workflows can remain explainable and auditable.
+
+## M5C Block 4 approved to applied scaffolding
+
+The `scripts/apply_application_decisions.py` helper turns approved ingestion records into a generic application-routing step using an external target catalog and a decision file. It writes:
+
+- `application_queue.json`
+- `application_queue.md`
+- `ingestion_state_applied_projection.jsonl`
+- `application_decision_journal.jsonl`
+- `application_transition_rollup.json`
+- `application_transition_rollup.md`
+- `application_queue_post_apply.json`
+- `application_queue_post_apply.md`
+
+This keeps downstream apply behavior connector-neutral while preserving provenance, approval history, and explainable operator routing decisions.
