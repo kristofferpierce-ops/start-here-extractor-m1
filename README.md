@@ -455,3 +455,26 @@ The companion `scripts/build_target_family_collector_fixtures.py` helper turns t
 - `target_family_collector_fixture_rollup.md`
 
 This creates concrete target-family scaffolding for future real adapters while keeping execution contract-driven, collector-friendly, and provenance-safe.
+
+
+## M5C Block 10 family-specific adapter interface templates and canonical raw payload contracts
+
+The `scripts/build_family_interface_templates.py` helper turns target-family runner stubs into family-specific adapter interface templates using an external template catalog. It writes:
+
+- `family_interface_templates.json`
+- `family_interface_templates.md`
+- `family_interface_template_review_queue.json`
+- `family_interface_template_review_queue.md`
+- `family_interface_template_rollup.json`
+- `family_interface_template_rollup.md`
+
+The companion `scripts/build_canonical_raw_payload_contracts.py` helper turns those templates into canonical raw payload contracts for target groups. It writes:
+
+- `canonical_raw_payload_contracts.json`
+- `canonical_raw_payload_contracts.md`
+- `canonical_raw_payload_review_queue.json`
+- `canonical_raw_payload_review_queue.md`
+- `canonical_raw_payload_rollup.json`
+- `canonical_raw_payload_rollup.md`
+
+This creates a stable family-specific seam for future concrete adapters and payload collectors while keeping the pipeline contract-driven, provenance-safe, and downstream-neutral.

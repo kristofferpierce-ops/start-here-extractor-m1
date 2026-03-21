@@ -71,6 +71,16 @@ from start_here_extractor.target_runner_families import (
     build_target_family_runner_stub_artifacts,
     build_target_family_collector_fixture_artifacts,
 )
+from start_here_extractor.family_interface_templates import (
+    FAMILY_INTERFACE_TEMPLATES_SCHEMA_VERSION,
+    FAMILY_INTERFACE_TEMPLATE_REVIEW_QUEUE_SCHEMA_VERSION,
+    FAMILY_INTERFACE_TEMPLATE_ROLLUP_SCHEMA_VERSION,
+    CANONICAL_RAW_PAYLOAD_CONTRACTS_SCHEMA_VERSION,
+    CANONICAL_RAW_PAYLOAD_REVIEW_QUEUE_SCHEMA_VERSION,
+    CANONICAL_RAW_PAYLOAD_ROLLUP_SCHEMA_VERSION,
+    build_family_interface_template_artifacts,
+    build_canonical_raw_payload_contract_artifacts,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -237,6 +247,28 @@ def sample_target_family_catalog() -> list[dict]:
             "supported_operations": ["upsert-evidence-record"],
             "supported_normalizer_keys": ["json-envelope-v1"],
             "default_fixture_statuses": ["success", "failure", "defer", "skip"],
+        }
+    ]
+
+
+def sample_family_interface_template_catalog() -> list[dict]:
+    return [
+        {
+            "family_template_key": "ops-core-ledger-template",
+            "template_family": "ops-core-ledger-template-family",
+            "template_version": "1.0",
+            "raw_payload_kind": "ops-core-ledger-raw-payload-v1",
+            "canonical_payload_kind": "ops-core-ledger-normalized-payload-v1",
+            "supported_target_family_keys": ["ops-core-ledger-family"],
+            "supported_target_systems": ["ops-core"],
+            "supported_target_types": ["evidence-ledger"],
+            "supported_adapter_families": ["ledger"],
+            "supported_interface_keys": ["ops-core-json-envelope-interface"],
+            "supported_normalizer_keys": ["json-envelope-v1"],
+            "supported_operations": ["upsert-evidence-record"],
+            "required_fields": ["runner_job_id", "outcome_collection_key", "status", "raw_payload_ref"],
+            "optional_fields": ["contract_id", "event_id", "status_reason", "payload_digest"],
+            "status_map": {"ok": "success", "failed": "failure", "retry": "defer", "skipped": "skip"},
         }
     ]
 
@@ -1600,6 +1632,14 @@ def build_sample_target_family_runner_stubs_doc() -> dict:
     return stubs_doc
 
 
+def build_sample_family_interface_templates_doc() -> dict:
+    stubs_doc = build_sample_target_family_runner_stubs_doc()
+    templates_doc, review_queue, _ = build_family_interface_template_artifacts(stubs_doc, sample_family_interface_template_catalog())
+    assert review_queue["item_count"] == 0
+    assert templates_doc["template_count"] == 1
+    return templates_doc
+
+
 def test_build_runner_interface_artifacts_creates_stubbed_interface_contract():
     jobs_doc = build_sample_runner_jobs_doc()
     contracts_doc, review_queue, rollup = build_runner_interface_artifacts(jobs_doc, sample_runner_interface_catalog())
@@ -1854,3 +1894,101 @@ def test_target_family_stub_and_fixture_scripts_write_expected_artifacts(tmp_pat
     assert stubs_doc["stub_count"] == 1
     assert rollup["outcome_status_counts"]["success"] == 1
 
+
+
+
+def test_build_family_interface_template_artifacts_creates_concrete_template():
+    stubs_doc = build_sample_target_family_runner_stubs_doc()
+    templates_doc, review_queue, rollup = build_family_interface_template_artifacts(stubs_doc, sample_family_interface_template_catalog())
+
+    assert templates_doc["schema_version"] == FAMILY_INTERFACE_TEMPLATES_SCHEMA_VERSION
+    assert templates_doc["template_count"] == 1
+    template_doc = templates_doc["templates"][0]
+    assert template_doc["template"]["family_template_key"] == "ops-core-ledger-template"
+    assert template_doc["template"]["raw_payload_kind"] == "ops-core-ledger-raw-payload-v1"
+    assert review_queue["schema_version"] == FAMILY_INTERFACE_TEMPLATE_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == FAMILY_INTERFACE_TEMPLATE_ROLLUP_SCHEMA_VERSION
+    assert rollup["template_family_counts"]["ops-core-ledger-template-family"] == 1
+
+
+
+def test_build_family_interface_template_artifacts_queues_missing_template():
+    stubs_doc = build_sample_target_family_runner_stubs_doc()
+    templates_doc, review_queue, rollup = build_family_interface_template_artifacts(stubs_doc, [])
+
+    assert templates_doc["template_count"] == 0
+    assert review_queue["item_count"] == 1
+    assert "no_family_interface_template_match" in review_queue["items"][0]["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_build_canonical_raw_payload_contract_artifacts_creates_contract():
+    templates_doc = build_sample_family_interface_templates_doc()
+    contracts_doc, review_queue, rollup = build_canonical_raw_payload_contract_artifacts(templates_doc)
+
+    assert contracts_doc["schema_version"] == CANONICAL_RAW_PAYLOAD_CONTRACTS_SCHEMA_VERSION
+    assert contracts_doc["contract_count"] == 1
+    contract_doc = contracts_doc["contracts"][0]
+    assert contract_doc["raw_payload_contract"]["raw_payload_kind"] == "ops-core-ledger-raw-payload-v1"
+    assert "success" in contract_doc["raw_payload_contract"]["accepted_canonical_statuses"]
+    assert review_queue["schema_version"] == CANONICAL_RAW_PAYLOAD_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == CANONICAL_RAW_PAYLOAD_ROLLUP_SCHEMA_VERSION
+    assert rollup["raw_payload_kind_counts"]["ops-core-ledger-raw-payload-v1"] == 1
+
+
+
+def test_family_interface_template_and_raw_payload_scripts_write_expected_artifacts(tmp_path: Path):
+    stubs_path = tmp_path / "target_family_runner_stubs.json"
+    stubs_path.write_text(
+        json.dumps(build_sample_target_family_runner_stubs_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    catalog_path = tmp_path / "family_interface_catalog.json"
+    catalog_path.write_text(
+        json.dumps({"family_interface_templates": sample_family_interface_template_catalog()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    templates_dir = tmp_path / "family_templates"
+    contracts_dir = tmp_path / "raw_payload_contracts"
+
+    templates_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_family_interface_templates.py",
+            "--target-runner-stubs-path",
+            str(stubs_path),
+            "--family-interface-catalog-path",
+            str(catalog_path),
+            "--out-dir",
+            str(templates_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert templates_proc.returncode == 0, templates_proc.stderr
+
+    contracts_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_canonical_raw_payload_contracts.py",
+            "--family-interface-templates-path",
+            str(templates_dir / "family_interface_templates.json"),
+            "--out-dir",
+            str(contracts_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert contracts_proc.returncode == 0, contracts_proc.stderr
+
+    templates_doc = json.loads((templates_dir / "family_interface_templates.json").read_text(encoding="utf-8"))
+    rollup = json.loads((contracts_dir / "canonical_raw_payload_rollup.json").read_text(encoding="utf-8"))
+    assert templates_doc["template_count"] == 1
+    assert rollup["raw_payload_kind_counts"]["ops-core-ledger-raw-payload-v1"] == 1
