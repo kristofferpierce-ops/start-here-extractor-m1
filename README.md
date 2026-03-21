@@ -525,3 +525,19 @@ This creates a concrete target-group adapter seam for future request/response im
 ## M5C Block 13
 
 Block 13 adds target-group adapter implementation shells and end-to-end round-trip fixture execution packs. These remain contract-driven and target-neutral, preserving provenance while preparing for concrete adapter implementations in later blocks.
+
+## Milestone 5C Block 14
+
+Block 14 adds replayable dry-run execution harnesses and orchestration packs on top of the target-group adapter implementation shells. It keeps execution offline and contract-driven while making the implementation shells runnable against the end-to-end fixture packs.
+
+### New scripts
+- `scripts/build_target_group_adapter_execution_harnesses.py`
+- `scripts/build_replayable_dry_run_orchestration_packs.py`
+
+### New artifacts
+- `target_group_adapter_execution_harnesses.json`
+- `target_group_adapter_execution_harness_review_queue.json`
+- `target_group_adapter_execution_harness_rollup.json`
+- `replayable_dry_run_orchestration_packs.json`
+- `replayable_dry_run_orchestration_review_queue.json`
+- `replayable_dry_run_orchestration_rollup.json`

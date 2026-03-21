@@ -102,6 +102,17 @@ from start_here_extractor.target_group_adapter_implementation_shells import (
     build_end_to_end_roundtrip_fixture_execution_pack_artifacts,
 )
 
+from start_here_extractor.target_group_adapter_execution_harnesses import (
+    TARGET_GROUP_ADAPTER_EXECUTION_HARNESSES_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_EXECUTION_HARNESS_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_EXECUTION_HARNESS_ROLLUP_SCHEMA_VERSION,
+    REPLAYABLE_DRY_RUN_ORCHESTRATION_PACKS_SCHEMA_VERSION,
+    REPLAYABLE_DRY_RUN_ORCHESTRATION_REVIEW_QUEUE_SCHEMA_VERSION,
+    REPLAYABLE_DRY_RUN_ORCHESTRATION_ROLLUP_SCHEMA_VERSION,
+    build_target_group_adapter_execution_harness_artifacts,
+    build_replayable_dry_run_orchestration_pack_artifacts,
+)
+
 from start_here_extractor.target_group_adapter_skeletons import (
     TARGET_GROUP_ADAPTER_SKELETONS_SCHEMA_VERSION,
     TARGET_GROUP_ADAPTER_SKELETON_REVIEW_QUEUE_SCHEMA_VERSION,
@@ -371,6 +382,32 @@ def sample_target_group_adapter_implementation_catalog() -> list[dict]:
             "entrypoint": "execute",
             "supports_live_execute": False,
             "supports_dry_run": True,
+        }
+    ]
+
+
+
+def sample_target_group_execution_harness_catalog() -> list[dict]:
+    return [
+        {
+            "target_group_key": "ops-core-ledger-group",
+            "implementation_group_key": "ops-core-ledger-implementation-group",
+            "harness_group_key": "ops-core-ledger-harness-group",
+            "harness_group_name": "Ops Core Ledger Harness Group",
+            "harness_kind": "ops-core-ledger-replayable-dry-run-harness",
+            "supported_target_group_keys": ["ops-core-ledger-group"],
+            "supported_implementation_group_keys": ["ops-core-ledger-implementation-group"],
+            "supported_target_systems": ["ops-core"],
+            "supported_target_types": ["evidence-ledger"],
+            "supported_operations": ["upsert-evidence-record"],
+            "supported_fixture_modes": ["success", "failure", "defer", "skip"],
+            "execution_modes": ["dry_run", "fixture_execution", "replayable_dry_run"],
+            "network_mode": "offline",
+            "replay_token_keys": ["event_id", "contract_id"],
+            "correlation_keys": ["event_id", "contract_id", "runner_job_id"],
+            "supports_replayable_dry_run": True,
+            "supports_fixture_execution": True,
+            "supports_live_execute": False,
         }
     ]
 
@@ -2475,3 +2512,150 @@ def test_target_group_implementation_shell_and_execution_pack_scripts_write_expe
     rollup = json.loads((packs_dir / "end_to_end_roundtrip_fixture_execution_rollup.json").read_text(encoding="utf-8"))
     assert shells_doc["shell_count"] == 1
     assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+
+def build_sample_target_group_adapter_execution_harnesses_doc() -> dict:
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+    harnesses_doc, harness_review_queue, _ = build_target_group_adapter_execution_harness_artifacts(
+        shells_doc,
+        execution_packs_doc,
+        sample_target_group_execution_harness_catalog(),
+    )
+    assert harness_review_queue["item_count"] == 0
+    assert harnesses_doc["harness_count"] == 1
+    return harnesses_doc
+
+
+def test_build_target_group_adapter_execution_harness_artifacts_creates_harness():
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+
+    harnesses_doc, review_queue, rollup = build_target_group_adapter_execution_harness_artifacts(
+        shells_doc,
+        execution_packs_doc,
+        sample_target_group_execution_harness_catalog(),
+    )
+
+    assert harnesses_doc["schema_version"] == TARGET_GROUP_ADAPTER_EXECUTION_HARNESSES_SCHEMA_VERSION
+    assert harnesses_doc["harness_count"] == 1
+    harness = harnesses_doc["harnesses"][0]
+    assert harness["state"] == "execution-harnessed"
+    assert harness["harness_group"]["harness_group_key"] == "ops-core-ledger-harness-group"
+    assert harness["execution_context"]["network_mode"] == "offline"
+    assert review_queue["schema_version"] == TARGET_GROUP_ADAPTER_EXECUTION_HARNESS_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_GROUP_ADAPTER_EXECUTION_HARNESS_ROLLUP_SCHEMA_VERSION
+    assert rollup["harness_group_counts"]["ops-core-ledger-harness-group"] == 1
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+def test_build_replayable_dry_run_orchestration_pack_artifacts_creates_pack():
+    harnesses_doc = build_sample_target_group_adapter_execution_harnesses_doc()
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+
+    packs_doc, review_queue, rollup = build_replayable_dry_run_orchestration_pack_artifacts(harnesses_doc, execution_packs_doc)
+
+    assert packs_doc["schema_version"] == REPLAYABLE_DRY_RUN_ORCHESTRATION_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert len(pack["steps"]) == 4
+    assert {item["fixture_mode"] for item in pack["steps"]} == {"success", "failure", "defer", "skip"}
+    assert review_queue["schema_version"] == REPLAYABLE_DRY_RUN_ORCHESTRATION_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == REPLAYABLE_DRY_RUN_ORCHESTRATION_ROLLUP_SCHEMA_VERSION
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+def test_target_group_execution_harness_and_replayable_dry_run_scripts_write_expected_artifacts(tmp_path: Path):
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc, skeleton_review_queue, _ = build_target_group_adapter_skeleton_artifacts(packages_doc, fixture_packs_doc, sample_target_group_adapter_skeleton_catalog())
+    assert skeleton_review_queue["item_count"] == 0
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    shells_doc, shell_review_queue, _ = build_target_group_adapter_implementation_shell_artifacts(
+        skeletons_doc,
+        cases_doc,
+        sample_target_group_adapter_implementation_catalog(),
+    )
+    assert shell_review_queue["item_count"] == 0
+    execution_packs_doc, execution_pack_review_queue, _ = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+    assert execution_pack_review_queue["item_count"] == 0
+
+    shells_path = tmp_path / "target_group_adapter_implementation_shells.json"
+    shells_path.write_text(json.dumps(shells_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    execution_packs_path = tmp_path / "end_to_end_roundtrip_fixture_execution_packs.json"
+    execution_packs_path.write_text(json.dumps(execution_packs_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    catalog_path = tmp_path / "target_group_execution_harness_catalog.json"
+    catalog_path.write_text(json.dumps({"target_group_execution_harnesses": sample_target_group_execution_harness_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    harnesses_dir = tmp_path / "execution_harnesses"
+    orchestration_dir = tmp_path / "orchestration_packs"
+
+    harness_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_group_adapter_execution_harnesses.py",
+            "--target-group-adapter-implementation-shells-path",
+            str(shells_path),
+            "--end-to-end-roundtrip-fixture-execution-packs-path",
+            str(execution_packs_path),
+            "--target-group-execution-harness-catalog-path",
+            str(catalog_path),
+            "--out-dir",
+            str(harnesses_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert harness_proc.returncode == 0, harness_proc.stderr
+
+    orchestration_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_replayable_dry_run_orchestration_packs.py",
+            "--target-group-adapter-execution-harnesses-path",
+            str(harnesses_dir / "target_group_adapter_execution_harnesses.json"),
+            "--end-to-end-roundtrip-fixture-execution-packs-path",
+            str(execution_packs_path),
+            "--out-dir",
+            str(orchestration_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert orchestration_proc.returncode == 0, orchestration_proc.stderr
+
+    harnesses_doc = json.loads((harnesses_dir / "target_group_adapter_execution_harnesses.json").read_text(encoding="utf-8"))
+    rollup = json.loads((orchestration_dir / "replayable_dry_run_orchestration_rollup.json").read_text(encoding="utf-8"))
+    assert harnesses_doc["harness_count"] == 1
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
