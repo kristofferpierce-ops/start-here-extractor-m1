@@ -311,3 +311,20 @@ python .\scripts\build_ingestion_journal.py --inventory-dir .\out\reports --out-
 ```
 
 This is intentionally additive. It does not replace the extractor inventory as source of truth. It creates the first generic backbone artifact that future connectors such as communications, CRM, and financial systems can share.
+
+
+## Milestone 5C block 2: relationship memory and operator review queue scaffolding
+
+This stage layers deterministic relationship-memory grouping and operator-review scaffolding on top of the generic ingestion journal.
+
+It adds:
+- a connector-neutral relationship memory snapshot built from ingestion records
+- deterministic candidate entity IDs anchored to stable relationship keys
+- a secret-safe operator review queue for records that still need match or approval decisions
+- a builder script that writes machine-readable queue artifacts plus a human-readable markdown summary
+
+Example:
+
+```powershell
+python .\scripts\build_relationship_memory.py --ingestion-path .\out\ingestion\ingestion-events.jsonl --out-dir .\out\relationship_memory
+```
