@@ -81,6 +81,16 @@ from start_here_extractor.family_interface_templates import (
     build_family_interface_template_artifacts,
     build_canonical_raw_payload_contract_artifacts,
 )
+from start_here_extractor.target_group_adapter_packages import (
+    TARGET_GROUP_ADAPTER_PACKAGES_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_PACKAGE_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_PACKAGE_ROLLUP_SCHEMA_VERSION,
+    CANONICAL_REQUEST_RESPONSE_FIXTURE_PACKS_SCHEMA_VERSION,
+    CANONICAL_REQUEST_RESPONSE_FIXTURE_REVIEW_QUEUE_SCHEMA_VERSION,
+    CANONICAL_REQUEST_RESPONSE_FIXTURE_ROLLUP_SCHEMA_VERSION,
+    build_target_group_adapter_package_artifacts,
+    build_canonical_request_response_fixture_pack_artifacts,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -269,6 +279,25 @@ def sample_family_interface_template_catalog() -> list[dict]:
             "required_fields": ["runner_job_id", "outcome_collection_key", "status", "raw_payload_ref"],
             "optional_fields": ["contract_id", "event_id", "status_reason", "payload_digest"],
             "status_map": {"ok": "success", "failed": "failure", "retry": "defer", "skipped": "skip"},
+        }
+    ]
+
+
+def sample_target_group_catalog() -> list[dict]:
+    return [
+        {
+            "target_group_key": "ops-core-ledger-group",
+            "target_group_name": "Ops Core Ledger Group",
+            "supported_target_family_keys": ["ops-core-ledger-family"],
+            "supported_template_families": ["ops-core-ledger-template-family"],
+            "supported_target_systems": ["ops-core"],
+            "supported_target_types": ["evidence-ledger"],
+            "supported_operations": ["upsert-evidence-record"],
+            "adapter_package_key": "ops-core-ledger-adapter-package",
+            "package_family": "ops-core-ledger-package-family",
+            "request_template_kind": "ops-core-ledger-request-fixture-v1",
+            "response_template_kind": "ops-core-ledger-response-fixture-v1",
+            "fixture_modes": ["success", "failure", "defer", "skip"],
         }
     ]
 
@@ -1640,6 +1669,14 @@ def build_sample_family_interface_templates_doc() -> dict:
     return templates_doc
 
 
+def build_sample_canonical_raw_payload_contracts_doc() -> dict:
+    templates_doc = build_sample_family_interface_templates_doc()
+    contracts_doc, review_queue, _ = build_canonical_raw_payload_contract_artifacts(templates_doc)
+    assert review_queue["item_count"] == 0
+    assert contracts_doc["contract_count"] == 1
+    return contracts_doc
+
+
 def test_build_runner_interface_artifacts_creates_stubbed_interface_contract():
     jobs_doc = build_sample_runner_jobs_doc()
     contracts_doc, review_queue, rollup = build_runner_interface_artifacts(jobs_doc, sample_runner_interface_catalog())
@@ -1992,3 +2029,120 @@ def test_family_interface_template_and_raw_payload_scripts_write_expected_artifa
     rollup = json.loads((contracts_dir / "canonical_raw_payload_rollup.json").read_text(encoding="utf-8"))
     assert templates_doc["template_count"] == 1
     assert rollup["raw_payload_kind_counts"]["ops-core-ledger-raw-payload-v1"] == 1
+
+
+def test_build_target_group_adapter_package_artifacts_creates_package():
+    templates_doc = build_sample_family_interface_templates_doc()
+    contracts_doc = build_sample_canonical_raw_payload_contracts_doc()
+    packages_doc, review_queue, rollup = build_target_group_adapter_package_artifacts(templates_doc, contracts_doc, sample_target_group_catalog())
+
+    assert packages_doc["schema_version"] == TARGET_GROUP_ADAPTER_PACKAGES_SCHEMA_VERSION
+    assert packages_doc["package_count"] == 1
+    package = packages_doc["packages"][0]
+    assert package["state"] == "packaged"
+    assert package["target_group"]["target_group_key"] == "ops-core-ledger-group"
+    assert package["package_scaffold"]["request_template"]["template_kind"] == "ops-core-ledger-request-fixture-v1"
+    assert review_queue["schema_version"] == TARGET_GROUP_ADAPTER_PACKAGE_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_GROUP_ADAPTER_PACKAGE_ROLLUP_SCHEMA_VERSION
+    assert rollup["target_group_counts"]["ops-core-ledger-group"] == 1
+
+
+
+def test_build_target_group_adapter_package_artifacts_queues_missing_target_group():
+    templates_doc = build_sample_family_interface_templates_doc()
+    contracts_doc = build_sample_canonical_raw_payload_contracts_doc()
+    packages_doc, review_queue, rollup = build_target_group_adapter_package_artifacts(templates_doc, contracts_doc, [])
+
+    assert packages_doc["package_count"] == 0
+    assert review_queue["item_count"] == 1
+    assert "no_target_group_match" in review_queue["items"][0]["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def build_sample_target_group_packages_doc() -> dict:
+    templates_doc = build_sample_family_interface_templates_doc()
+    contracts_doc = build_sample_canonical_raw_payload_contracts_doc()
+    packages_doc, review_queue, _ = build_target_group_adapter_package_artifacts(templates_doc, contracts_doc, sample_target_group_catalog())
+    assert review_queue["item_count"] == 0
+    assert packages_doc["package_count"] == 1
+    return packages_doc
+
+
+
+def test_build_canonical_request_response_fixture_pack_artifacts_creates_pack():
+    packages_doc = build_sample_target_group_packages_doc()
+    packs_doc, review_queue, rollup = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+
+    assert packs_doc["schema_version"] == CANONICAL_REQUEST_RESPONSE_FIXTURE_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert len(pack["request_fixtures"]) == 4
+    assert {item["fixture_mode"] for item in pack["request_fixtures"]} == {"success", "failure", "defer", "skip"}
+    assert review_queue["schema_version"] == CANONICAL_REQUEST_RESPONSE_FIXTURE_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == CANONICAL_REQUEST_RESPONSE_FIXTURE_ROLLUP_SCHEMA_VERSION
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+
+def test_target_group_package_and_fixture_scripts_write_expected_artifacts(tmp_path: Path):
+    templates_path = tmp_path / "family_interface_templates.json"
+    templates_path.write_text(
+        json.dumps(build_sample_family_interface_templates_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    contracts_path = tmp_path / "canonical_raw_payload_contracts.json"
+    contracts_path.write_text(
+        json.dumps(build_sample_canonical_raw_payload_contracts_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    target_group_catalog_path = tmp_path / "target_group_catalog.json"
+    target_group_catalog_path.write_text(
+        json.dumps({"target_groups": sample_target_group_catalog()}, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    packages_dir = tmp_path / "target_group_packages"
+    packs_dir = tmp_path / "request_response_fixtures"
+
+    packages_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_group_adapter_packages.py",
+            "--family-interface-templates-path",
+            str(templates_path),
+            "--raw-payload-contracts-path",
+            str(contracts_path),
+            "--target-group-catalog-path",
+            str(target_group_catalog_path),
+            "--out-dir",
+            str(packages_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert packages_proc.returncode == 0, packages_proc.stderr
+
+    packs_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_canonical_request_response_fixture_packs.py",
+            "--target-group-packages-path",
+            str(packages_dir / "target_group_adapter_packages.json"),
+            "--out-dir",
+            str(packs_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert packs_proc.returncode == 0, packs_proc.stderr
+
+    packages_doc = json.loads((packages_dir / "target_group_adapter_packages.json").read_text(encoding="utf-8"))
+    rollup = json.loads((packs_dir / "canonical_request_response_fixture_rollup.json").read_text(encoding="utf-8"))
+    assert packages_doc["package_count"] == 1
+    assert rollup["fixture_mode_counts"]["success"] == 1

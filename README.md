@@ -477,4 +477,24 @@ The companion `scripts/build_canonical_raw_payload_contracts.py` helper turns th
 - `canonical_raw_payload_rollup.json`
 - `canonical_raw_payload_rollup.md`
 
+## M5C Block 11 target-group adapter package scaffolds and canonical request/response fixture packs
+
+The `scripts/build_target_group_adapter_packages.py` helper turns family interface templates and canonical raw payload contracts into target-group adapter package scaffolds using a target-group catalog. It writes:
+
+- `target_group_adapter_packages.json`
+- `target_group_adapter_packages.md`
+- `target_group_adapter_package_review_queue.json`
+- `target_group_adapter_package_review_queue.md`
+- `target_group_adapter_package_rollup.json`
+- `target_group_adapter_package_rollup.md`
+
+The companion `scripts/build_canonical_request_response_fixture_packs.py` helper turns those package scaffolds into canonical request/response fixture packs. It writes:
+
+- `canonical_request_response_fixture_packs.json`
+- `canonical_request_response_fixture_packs.md`
+- `canonical_request_response_fixture_review_queue.json`
+- `canonical_request_response_fixture_review_queue.md`
+- `canonical_request_response_fixture_rollup.json`
+- `canonical_request_response_fixture_rollup.md`
+
 This creates a stable family-specific seam for future concrete adapters and payload collectors while keeping the pipeline contract-driven, provenance-safe, and downstream-neutral.
