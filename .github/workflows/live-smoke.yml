@@ -155,7 +155,11 @@ import json
 from pathlib import Path
 
 summary = json.loads(Path("./out/live_smoke_summary.json").read_text(encoding="utf-8"))
+contract = json.loads(Path("./out/live_smoke_artifact_contract.json").read_text(encoding="utf-8"))
 print(f"Live smoke classification: {summary['classification']}")
+print(f"Artifact contract valid: {contract['valid']}")
+if not contract.get("valid"):
+    raise SystemExit(1)
 if not summary.get("success"):
     raise SystemExit(1)
 PY

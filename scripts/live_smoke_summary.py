@@ -4,7 +4,11 @@ import argparse
 import json
 from pathlib import Path
 
-from start_here_extractor.live_smoke import build_live_smoke_summary, render_live_smoke_markdown
+from start_here_extractor.live_smoke import (
+    build_live_smoke_artifact_contract,
+    build_live_smoke_summary,
+    render_live_smoke_markdown,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,9 +43,23 @@ def main(argv: list[str] | None = None) -> int:
     json_path = out_dir / "live_smoke_summary.json"
     markdown_path = out_dir / "live_smoke_summary.md"
     json_path.write_text(json.dumps(summary.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-    markdown_path.write_text(render_live_smoke_markdown(summary), encoding="utf-8")
+    markdown_path.write_text("", encoding="utf-8")
+
+    artifact_contract = build_live_smoke_artifact_contract(
+        report_dir=args.report_dir,
+        monitoring_dir=args.monitoring_dir,
+        audit_dir=args.audit_dir,
+        stdout_log=args.stdout_log,
+        stderr_log=args.stderr_log,
+        summary_json_path=json_path,
+        summary_markdown_path=markdown_path,
+    )
+    markdown_path.write_text(render_live_smoke_markdown(summary, artifact_contract=artifact_contract), encoding="utf-8")
+    contract_path = out_dir / "live_smoke_artifact_contract.json"
+    contract_path.write_text(json.dumps(artifact_contract.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(json_path)
     print(markdown_path)
+    print(contract_path)
     return 0
 
 

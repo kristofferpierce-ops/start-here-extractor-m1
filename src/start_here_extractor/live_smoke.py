@@ -8,6 +8,35 @@ from typing import Any
 from .security import redact_sensitive_fields
 
 
+LIVE_SMOKE_ARTIFACT_CONTRACT_VERSION = "1"
+
+
+@dataclass(slots=True)
+class LiveSmokeArtifactStatus:
+    name: str
+    kind: str
+    required: bool
+    present: bool
+    path: str | None = None
+    record_count: int | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class LiveSmokeArtifactContract:
+    version: str
+    valid: bool
+    missing_required: list[str] = field(default_factory=list)
+    artifacts: list[LiveSmokeArtifactStatus] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["artifacts"] = [artifact.to_dict() for artifact in self.artifacts]
+        return payload
+
+
 @dataclass(slots=True)
 class LiveSmokeSummary:
     provider: str
@@ -98,6 +127,70 @@ def _unique_notes(values: list[str]) -> list[str]:
         if note and note not in result:
             result.append(note)
     return result
+
+
+def _artifact_status(*, name: str, kind: str, path: str | Path | None, required: bool, record_count: int | None = None) -> LiveSmokeArtifactStatus:
+    location = str(path) if path else None
+    present = bool(location and Path(location).exists())
+    return LiveSmokeArtifactStatus(
+        name=name,
+        kind=kind,
+        required=required,
+        present=present,
+        path=location,
+        record_count=record_count,
+    )
+
+
+def build_live_smoke_artifact_contract(
+    *,
+    report_dir: str | Path | None,
+    monitoring_dir: str | Path | None = None,
+    audit_dir: str | Path | None = None,
+    stdout_log: str | Path | None = None,
+    stderr_log: str | Path | None = None,
+    summary_json_path: str | Path | None = None,
+    summary_markdown_path: str | Path | None = None,
+) -> LiveSmokeArtifactContract:
+    inventory_paths = _find_inventory_paths(report_dir)
+    inventory_path = inventory_paths[0] if inventory_paths else None
+    monitoring_path = _first_jsonl_path(monitoring_dir) if monitoring_dir else None
+    audit_path = _first_jsonl_path(audit_dir) if audit_dir else None
+
+    artifacts = [
+        _artifact_status(name="summary_json", kind="summary-json", path=summary_json_path, required=summary_json_path is not None),
+        _artifact_status(name="summary_markdown", kind="summary-markdown", path=summary_markdown_path, required=summary_markdown_path is not None),
+        _artifact_status(name="stdout_log", kind="log", path=stdout_log, required=stdout_log is not None),
+        _artifact_status(name="stderr_log", kind="log", path=stderr_log, required=stderr_log is not None),
+        _artifact_status(
+            name="inventory_jsonl",
+            kind="inventory-jsonl",
+            path=inventory_path,
+            required=False,
+            record_count=len(_read_jsonl(inventory_path)) if inventory_path else 0,
+        ),
+        _artifact_status(
+            name="monitoring_jsonl",
+            kind="monitoring-jsonl",
+            path=monitoring_path,
+            required=False,
+            record_count=len(_read_jsonl(monitoring_path)) if monitoring_path else 0,
+        ),
+        _artifact_status(
+            name="audit_jsonl",
+            kind="audit-jsonl",
+            path=audit_path,
+            required=False,
+            record_count=len(_read_jsonl(audit_path)) if audit_path else 0,
+        ),
+    ]
+    missing_required = [artifact.name for artifact in artifacts if artifact.required and not artifact.present]
+    return LiveSmokeArtifactContract(
+        version=LIVE_SMOKE_ARTIFACT_CONTRACT_VERSION,
+        valid=not missing_required,
+        missing_required=missing_required,
+        artifacts=artifacts,
+    )
 
 
 def classify_live_smoke_run(
@@ -288,7 +381,7 @@ def build_live_smoke_summary(
     )
 
 
-def render_live_smoke_markdown(summary: LiveSmokeSummary) -> str:
+def render_live_smoke_markdown(summary: LiveSmokeSummary, artifact_contract: LiveSmokeArtifactContract | None = None) -> str:
     success_text = "yes" if summary.success else "no"
     lines = [
         "# Live smoke summary",
@@ -319,7 +412,18 @@ def render_live_smoke_markdown(summary: LiveSmokeSummary) -> str:
     ]
     for label, value in optional_rows:
         if value:
-            lines.append(f"- {label}: `{value}`" if label.endswith("artifact") or label in {"Source type", "ZIP path", "Outcome", "Auth state", "Policy decision"} else f"- {label}: {value}")
+            lines.append(
+                f"- {label}: `{value}`"
+                if label.endswith("artifact") or label in {"Source type", "ZIP path", "Outcome", "Auth state", "Policy decision"}
+                else f"- {label}: {value}"
+            )
+    if artifact_contract is not None:
+        lines.append(f"- Artifact contract version: `{artifact_contract.version}`")
+        lines.append(f"- Artifact contract valid: `{'true' if artifact_contract.valid else 'false'}`")
+        if artifact_contract.missing_required:
+            lines.append("- Missing required artifacts:")
+            for name in artifact_contract.missing_required:
+                lines.append(f"  - `{name}`")
     if summary.notes:
         lines.extend(["- Notes:"])
         for note in summary.notes:
