@@ -135,6 +135,17 @@ from start_here_extractor.target_group_adapter_harness_results import (
     build_replay_outcome_comparison_pack_artifacts,
 )
 
+from start_here_extractor.target_group_adapter_milestone_closeout import (
+    M5C_CLOSEOUT_PACKS_SCHEMA_VERSION,
+    M5C_CLOSEOUT_REVIEW_QUEUE_SCHEMA_VERSION,
+    M5C_CLOSEOUT_ROLLUP_SCHEMA_VERSION,
+    MILESTONE5_COMPLETION_PACKS_SCHEMA_VERSION,
+    MILESTONE5_COMPLETION_REVIEW_QUEUE_SCHEMA_VERSION,
+    MILESTONE5_COMPLETION_ROLLUP_SCHEMA_VERSION,
+    build_m5c_closeout_pack_artifacts,
+    build_milestone5_completion_pack_artifacts,
+)
+
 from start_here_extractor.target_group_adapter_skeletons import (
     TARGET_GROUP_ADAPTER_SKELETONS_SCHEMA_VERSION,
     TARGET_GROUP_ADAPTER_SKELETON_REVIEW_QUEUE_SCHEMA_VERSION,
@@ -2933,3 +2944,115 @@ def test_promotion_readiness_and_live_candidate_scripts_write_expected_artifacts
     rollup = json.loads((candidate_dir / "live_integration_candidate_rollup.json").read_text(encoding="utf-8"))
     assert packs_doc["pack_count"] == 1
     assert rollup["candidate_status_counts"]["ready_for_live_integration"] == 1
+
+
+
+def build_sample_target_group_promotion_readiness_packs_doc() -> dict:
+    journals_doc = build_sample_dry_run_harness_result_journals_doc()
+    comparison_doc = build_sample_replay_outcome_comparison_packs_doc()
+    packs_doc, review_queue, _ = build_target_group_promotion_readiness_pack_artifacts(journals_doc, comparison_doc)
+    assert review_queue["item_count"] == 0
+    assert packs_doc["pack_count"] == 1
+    return packs_doc
+
+
+def build_sample_live_integration_candidate_packs_doc() -> dict:
+    readiness_doc = build_sample_target_group_promotion_readiness_packs_doc()
+    packs_doc, review_queue, _ = build_live_integration_candidate_pack_artifacts(readiness_doc)
+    assert review_queue["item_count"] == 0
+    assert packs_doc["pack_count"] == 1
+    return packs_doc
+
+
+def test_build_m5c_closeout_pack_artifacts_creates_complete_pack():
+    readiness_doc = build_sample_target_group_promotion_readiness_packs_doc()
+    candidate_doc = build_sample_live_integration_candidate_packs_doc()
+
+    packs_doc, review_queue, rollup = build_m5c_closeout_pack_artifacts(readiness_doc, candidate_doc)
+
+    assert packs_doc["schema_version"] == M5C_CLOSEOUT_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert pack["state"] == "m5c-closeout-packaged"
+    assert pack["closeout_status"] == "m5c_complete"
+    assert pack["closeout_gate"]["ready_for_m5c_completion"] is True
+    assert review_queue["schema_version"] == M5C_CLOSEOUT_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == M5C_CLOSEOUT_ROLLUP_SCHEMA_VERSION
+    assert rollup["closeout_status_counts"]["m5c_complete"] == 1
+
+
+def test_build_milestone5_completion_pack_artifacts_creates_completion_pack():
+    readiness_doc = build_sample_target_group_promotion_readiness_packs_doc()
+    candidate_doc = build_sample_live_integration_candidate_packs_doc()
+    closeout_doc, closeout_review_queue, _ = build_m5c_closeout_pack_artifacts(readiness_doc, candidate_doc)
+    assert closeout_review_queue["item_count"] == 0
+
+    packs_doc, review_queue, rollup = build_milestone5_completion_pack_artifacts(closeout_doc, closeout_review_queue)
+
+    assert packs_doc["schema_version"] == MILESTONE5_COMPLETION_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert pack["state"] == "milestone5-completion-assessed"
+    assert pack["completion_status"] == "milestone5_complete"
+    assert pack["milestone_status"]["m5c_complete"] is True
+    assert review_queue["schema_version"] == MILESTONE5_COMPLETION_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == MILESTONE5_COMPLETION_ROLLUP_SCHEMA_VERSION
+    assert rollup["completion_status_counts"]["milestone5_complete"] == 1
+
+
+def test_m5c_closeout_and_milestone5_completion_scripts_write_expected_artifacts(tmp_path: Path):
+    readiness_path = tmp_path / "target_group_promotion_readiness_packs.json"
+    readiness_path.write_text(
+        json.dumps(build_sample_target_group_promotion_readiness_packs_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    candidate_path = tmp_path / "live_integration_candidate_packs.json"
+    candidate_path.write_text(
+        json.dumps(build_sample_live_integration_candidate_packs_doc(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    closeout_dir = tmp_path / "m5c_closeout"
+    completion_dir = tmp_path / "milestone5_completion"
+
+    closeout_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_m5c_closeout_packs.py",
+            "--target-group-promotion-readiness-packs-path",
+            str(readiness_path),
+            "--live-integration-candidate-packs-path",
+            str(candidate_path),
+            "--out-dir",
+            str(closeout_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert closeout_proc.returncode == 0, closeout_proc.stderr
+
+    completion_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_milestone5_completion_packs.py",
+            "--m5c-closeout-packs-path",
+            str(closeout_dir / "m5c_closeout_packs.json"),
+            "--m5c-closeout-review-queue-path",
+            str(closeout_dir / "m5c_closeout_review_queue.json"),
+            "--out-dir",
+            str(completion_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completion_proc.returncode == 0, completion_proc.stderr
+
+    closeout_doc = json.loads((closeout_dir / "m5c_closeout_packs.json").read_text(encoding="utf-8"))
+    rollup = json.loads((completion_dir / "milestone5_completion_rollup.json").read_text(encoding="utf-8"))
+    assert closeout_doc["pack_count"] == 1
+    assert rollup["completion_status_counts"]["milestone5_complete"] == 1

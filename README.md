@@ -575,3 +575,20 @@ Block 16 adds target-group promotion readiness packs and live integration candid
 - `live_integration_candidate_packs.json`
 - `live_integration_candidate_review_queue.json`
 - `live_integration_candidate_rollup.json`
+
+
+## M5C Block 17
+
+Block 17 adds M5C closeout packs and Milestone 5 completion packs on top of the promotion-readiness and live-integration-candidate layers. It keeps the system offline and contract-driven while packaging milestone completion state into replay-safe, provenance-safe artifacts.
+
+### New scripts
+- `scripts/build_m5c_closeout_packs.py`
+- `scripts/build_milestone5_completion_packs.py`
+
+### New artifacts
+- `m5c_closeout_packs.json`
+- `m5c_closeout_review_queue.json`
+- `m5c_closeout_rollup.json`
+- `milestone5_completion_packs.json`
+- `milestone5_completion_review_queue.json`
+- `milestone5_completion_rollup.json`
