@@ -16,9 +16,17 @@ on:
         required: true
         default: drive_smoke_test
 
+permissions:
+  contents: read
+
+concurrency:
+  group: live-provider-smoke-${{ github.ref }}-${{ inputs.provider }}
+  cancel-in-progress: false
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -27,10 +35,10 @@ jobs:
           python-version: "3.12"
 
       - name: Install package and dev dependencies
+        shell: bash
         run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
 
-      - name: Resolve provider token
-        id: token
+      - name: Prepare provider token command
         shell: bash
         env:
           GDRIVE_ACCESS_TOKEN: ${{ secrets.GDRIVE_ACCESS_TOKEN }}
@@ -38,6 +46,7 @@ jobs:
           GRAPH_ACCESS_TOKEN: ${{ secrets.GRAPH_ACCESS_TOKEN }}
         run: |
           set -euo pipefail
+          mkdir -p ./out/logs
           case "${{ inputs.provider }}" in
             gdrive)
               TOKEN="${GDRIVE_ACCESS_TOKEN:-}"
@@ -49,38 +58,104 @@ jobs:
               TOKEN="${GRAPH_ACCESS_TOKEN:-}"
               ;;
             *)
-              echo "Unsupported provider: ${{ inputs.provider }}" >&2
-              exit 1
+              TOKEN=""
+              echo "Unsupported provider: ${{ inputs.provider }}" > ./out/logs/preflight.stderr.log
               ;;
           esac
 
-          if [ -z "$TOKEN" ]; then
-            echo "Missing token secret for provider ${{ inputs.provider }}" >&2
-            exit 1
+          if [ -n "$TOKEN" ]; then
+            echo "::add-mask::$TOKEN"
+          else
+            echo "Missing token secret for provider ${{ inputs.provider }}" > ./out/logs/preflight.stderr.log
           fi
 
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          TOKEN_COMMAND_PATH="$RUNNER_TEMP/live_smoke_token_command.py"
+          cat > "$TOKEN_COMMAND_PATH" <<'PY'
+import json
+import os
+
+value = os.environ.get("LIVE_SMOKE_ACCESS_TOKEN", "").strip()
+if not value:
+    raise SystemExit("missing-live-smoke-access-token")
+print(json.dumps({
+    "access_token": value,
+    "source": "github-actions-secret",
+    "notes": ["workflow-live-smoke"],
+}))
+PY
+          chmod 700 "$TOKEN_COMMAND_PATH"
+          {
+            echo "LIVE_SMOKE_ACCESS_TOKEN=$TOKEN"
+            echo "LIVE_SMOKE_TOKEN_COMMAND=python \"$TOKEN_COMMAND_PATH\""
+          } >> "$GITHUB_ENV"
 
       - name: Run live provider smoke test
+        id: smoke
         shell: bash
         run: |
-          set -euo pipefail
-          python -m start_here_extractor.cli             --cloud-provider "${{ inputs.provider }}"             --cloud-access-token "${{ steps.token.outputs.token }}"             --cloud-query "${{ inputs.query }}"             --output-dir ./out/remote_extracted             --report-dir ./out/remote_reports
+          set +e
+          mkdir -p ./out/logs ./out/remote_extracted ./out/remote_reports ./out/remote_audit ./out/remote_monitoring
+          python -m start_here_extractor.cli \
+            --cloud-provider "${{ inputs.provider }}" \
+            --cloud-access-token-command "$LIVE_SMOKE_TOKEN_COMMAND" \
+            --cloud-query "${{ inputs.query }}" \
+            --output-dir ./out/remote_extracted \
+            --report-dir ./out/remote_reports \
+            --audit-dir ./out/remote_audit \
+            --durable-audit \
+            --monitoring-dir ./out/remote_monitoring \
+            --durable-monitoring \
+            --cloud-retry-max-attempts 4 \
+            --cloud-retry-base-delay-seconds 0.25 \
+            --cloud-retry-max-delay-seconds 5.0 \
+            --cloud-retry-jitter-seconds 0.0 \
+            > ./out/logs/cli.stdout.log 2> ./out/logs/cli.stderr.log
+          CLI_EXIT_CODE=$?
+          set -e
+          echo "cli_exit_code=$CLI_EXIT_CODE" >> "$GITHUB_OUTPUT"
 
-      - name: Show smoke outputs
+      - name: Build hosted smoke summary
+        if: always()
         shell: bash
         run: |
           set -euo pipefail
-          find ./out -maxdepth 3 -type f | sort
-          REPORT="$(find ./out/remote_reports -name '*.inventory.jsonl' | head -n 1)"
-          if [ -n "$REPORT" ]; then
-            echo "Inventory:"
-            cat "$REPORT"
-          fi
+          python ./scripts/live_smoke_summary.py \
+            --provider "${{ inputs.provider }}" \
+            --query "${{ inputs.query }}" \
+            --cli-exit-code "${{ steps.smoke.outputs.cli_exit_code || '1' }}" \
+            --out-dir ./out \
+            --report-dir ./out/remote_reports \
+            --monitoring-dir ./out/remote_monitoring \
+            --audit-dir ./out/remote_audit \
+            --stdout-log ./out/logs/cli.stdout.log \
+            --stderr-log ./out/logs/cli.stderr.log
+          cat ./out/live_smoke_summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: List smoke outputs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          find ./out -maxdepth 4 -type f | sort
 
       - name: Upload smoke artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-smoke-${{ inputs.provider }}
           path: out/
+
+      - name: Enforce smoke success
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+import json
+from pathlib import Path
+
+summary = json.loads(Path("./out/live_smoke_summary.json").read_text(encoding="utf-8"))
+print(f"Live smoke classification: {summary['classification']}")
+if not summary.get("success"):
+    raise SystemExit(1)
+PY

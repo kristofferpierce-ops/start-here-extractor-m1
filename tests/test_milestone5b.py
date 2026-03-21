@@ -7,6 +7,7 @@ from start_here_extractor.cloud.base import RemoteSearchQuery
 from start_here_extractor.cloud.gdrive import GoogleDriveAuthConfig, GoogleDriveLocator
 from start_here_extractor.cloud.http import HttpResponse
 from start_here_extractor.errors import RemoteAuthError, RemoteRateLimitError
+from start_here_extractor.live_smoke import build_live_smoke_summary, render_live_smoke_markdown
 from start_here_extractor.reporter import build_inventory_record
 from start_here_extractor.types import RetryPolicy
 
@@ -188,3 +189,156 @@ def test_inventory_monitoring_includes_provider_health_and_quota_state():
     assert record["monitoring"]["review_required"] is True
     assert "provider-rate-limited" in record["warnings"]
     assert "token-near-expiry" in record["warnings"]
+
+
+def test_live_smoke_summary_classifies_success_from_inventory(tmp_path):
+    report_dir = tmp_path / "reports"
+    monitoring_dir = tmp_path / "monitoring"
+    audit_dir = tmp_path / "audit"
+    logs_dir = tmp_path / "logs"
+    report_dir.mkdir()
+    monitoring_dir.mkdir()
+    audit_dir.mkdir()
+    logs_dir.mkdir()
+
+    record = build_inventory_record(
+        {
+            "outcome": "success",
+            "zip_file": {"path": "C:/tmp/example.zip", "md5": "abc"},
+            "selected_candidate": {"name": "START HERE.txt"},
+            "extracted_file": {"path": "C:/tmp/out/START HERE.txt", "size_bytes": 12, "md5": "def"},
+            "preview": {"text": "hello", "encoding": "utf-8"},
+            "provenance": {"source_type": "gdrive"},
+            "_runtime_cloud": {
+                "token_health": {"source": "command", "status": "fresh", "refresh_count": 1},
+                "provider_health": {
+                    "provider": "gdrive",
+                    "auth_state": "fresh",
+                    "auth_refresh_count": 1,
+                    "request_count": 2,
+                    "success_count": 2,
+                    "error_count": 0,
+                    "last_operation": "download",
+                    "last_status_code": 200,
+                    "notes": [],
+                    "quota": {
+                        "rate_limited": False,
+                        "throttle_count": 0,
+                        "retry_after_seconds": None,
+                        "last_status_code": None,
+                        "last_reason": None,
+                        "last_event_at": "2030-01-01T00:00:00+00:00",
+                    },
+                    "retry": {
+                        "observed_retries": 0,
+                        "last_delay_seconds": None,
+                        "last_reason": None,
+                        "last_attempt": None,
+                        "exhausted": False,
+                        "last_event_at": "2030-01-01T00:00:00+00:00",
+                        "policy": {
+                            "max_attempts": 4,
+                            "base_delay_seconds": 0.25,
+                            "max_delay_seconds": 5.0,
+                            "jitter_seconds": 0.0,
+                        },
+                    },
+                },
+            },
+        },
+        monitoring_dir=monitoring_dir,
+        audit_dir=audit_dir,
+    )
+    inventory_path = report_dir / "example.inventory.jsonl"
+    inventory_path.write_text(__import__("json").dumps(record) + "\n", encoding="utf-8")
+    (logs_dir / "cli.stdout.log").write_text("[success] smoke\n", encoding="utf-8")
+    (logs_dir / "cli.stderr.log").write_text("", encoding="utf-8")
+
+    summary = build_live_smoke_summary(
+        provider="gdrive",
+        query="drive_smoke_test",
+        cli_exit_code=0,
+        report_dir=report_dir,
+        monitoring_dir=monitoring_dir,
+        audit_dir=audit_dir,
+        stdout_log=logs_dir / "cli.stdout.log",
+        stderr_log=logs_dir / "cli.stderr.log",
+    )
+
+    assert summary.success is True
+    assert summary.classification == "success"
+    assert summary.inventory_count == 1
+    assert summary.monitoring_event_count == 1
+    assert summary.audit_event_count == 1
+    markdown = render_live_smoke_markdown(summary)
+    assert "Classification: `success`" in markdown
+
+
+def test_live_smoke_summary_classifies_no_remote_zip_from_logs(tmp_path):
+    report_dir = tmp_path / "reports"
+    logs_dir = tmp_path / "logs"
+    report_dir.mkdir()
+    logs_dir.mkdir()
+    (logs_dir / "cli.stdout.log").write_text("", encoding="utf-8")
+    (logs_dir / "cli.stderr.log").write_text("No remote ZIP files found from the provided cloud provider/query\n", encoding="utf-8")
+
+    summary = build_live_smoke_summary(
+        provider="dropbox",
+        query="missing_test",
+        cli_exit_code=1,
+        report_dir=report_dir,
+        monitoring_dir=tmp_path / "monitoring",
+        audit_dir=tmp_path / "audit",
+        stdout_log=logs_dir / "cli.stdout.log",
+        stderr_log=logs_dir / "cli.stderr.log",
+    )
+
+    assert summary.success is False
+    assert summary.classification == "no-remote-zip"
+    assert summary.reason == "No remote ZIP files matched the hosted smoke query."
+
+
+def test_live_smoke_summary_classifies_token_resolution_failure_from_logs(tmp_path):
+    report_dir = tmp_path / "reports"
+    logs_dir = tmp_path / "logs"
+    report_dir.mkdir()
+    logs_dir.mkdir()
+    (logs_dir / "cli.stdout.log").write_text("", encoding="utf-8")
+    (logs_dir / "cli.stderr.log").write_text("TokenResolutionError: token-command-failed:1\n", encoding="utf-8")
+
+    summary = build_live_smoke_summary(
+        provider="graph",
+        query="auth_test",
+        cli_exit_code=1,
+        report_dir=report_dir,
+        monitoring_dir=tmp_path / "monitoring",
+        audit_dir=tmp_path / "audit",
+        stdout_log=logs_dir / "cli.stdout.log",
+        stderr_log=logs_dir / "cli.stderr.log",
+    )
+
+    assert summary.success is False
+    assert summary.classification == "token-resolution-failed"
+
+
+def test_live_smoke_summary_classifies_auth_failure_from_logs(tmp_path):
+    report_dir = tmp_path / "reports"
+    logs_dir = tmp_path / "logs"
+    report_dir.mkdir()
+    logs_dir.mkdir()
+    (logs_dir / "cli.stdout.log").write_text("", encoding="utf-8")
+    (logs_dir / "cli.stderr.log").write_text("RemoteAuthError: http-auth-error:401\n", encoding="utf-8")
+
+    summary = build_live_smoke_summary(
+        provider="gdrive",
+        query="auth_test",
+        cli_exit_code=1,
+        report_dir=report_dir,
+        monitoring_dir=tmp_path / "monitoring",
+        audit_dir=tmp_path / "audit",
+        stdout_log=logs_dir / "cli.stdout.log",
+        stderr_log=logs_dir / "cli.stderr.log",
+    )
+
+    assert summary.success is False
+    assert summary.classification == "auth-failed"
