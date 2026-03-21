@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from scripts.live_smoke_matrix import main as live_smoke_matrix_main
 from scripts.live_smoke_summary import main as live_smoke_summary_main
 from start_here_extractor.cloud.auth import build_access_token_provider, resolve_access_token
 from start_here_extractor.cloud.base import RemoteSearchQuery
@@ -18,6 +19,13 @@ from start_here_extractor.live_smoke import (
     build_live_smoke_artifact_contract,
     build_live_smoke_summary,
     render_live_smoke_markdown,
+)
+from start_here_extractor.live_smoke_matrix import (
+    LIVE_SMOKE_MATRIX_SUMMARY_VERSION,
+    build_live_smoke_matrix_plan,
+    build_live_smoke_matrix_summary,
+    normalize_provider_selection,
+    render_live_smoke_matrix_markdown,
 )
 from start_here_extractor.reporter import build_inventory_record
 from start_here_extractor.types import RetryPolicy
@@ -331,3 +339,113 @@ def test_live_smoke_summary_script_writes_summary_and_contract(tmp_path):
     assert contract_payload["version"] == LIVE_SMOKE_ARTIFACT_CONTRACT_VERSION
     markdown = (out_dir / "live_smoke_summary.md").read_text(encoding="utf-8")
     assert "Artifact contract valid: `true`" in markdown
+
+
+def _write_matrix_provider_artifacts(tmp_path: Path, provider: str, case: str, query: str, cli_exit_code: int) -> Path:
+    fixture_root = tmp_path / f"fixture_{provider}_{case}"
+    shutil.copytree(FIXTURE_ROOT / case, fixture_root)
+    artifact_dir = tmp_path / "artifacts" / f"live-smoke-{provider}"
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    exit_code = live_smoke_summary_main(
+        [
+            "--provider",
+            provider,
+            "--query",
+            query,
+            "--cli-exit-code",
+            str(cli_exit_code),
+            "--out-dir",
+            str(artifact_dir),
+            "--report-dir",
+            str(fixture_root / "reports"),
+            "--monitoring-dir",
+            str(fixture_root / "monitoring"),
+            "--audit-dir",
+            str(fixture_root / "audit"),
+            "--stdout-log",
+            str(fixture_root / "logs" / "cli.stdout.log"),
+            "--stderr-log",
+            str(fixture_root / "logs" / "cli.stderr.log"),
+        ]
+    )
+    assert exit_code == 0
+    return artifact_dir
+
+
+def test_normalize_provider_selection_accepts_all_and_dedupes():
+    assert normalize_provider_selection("gdrive, dropbox, gdrive", default_all=True) == ["gdrive", "dropbox"]
+    assert normalize_provider_selection("all", default_all=True) == ["gdrive", "dropbox", "graph"]
+
+
+def test_build_live_smoke_matrix_plan_rejects_required_provider_outside_selection():
+    with pytest.raises(ValueError, match="required provider"):
+        build_live_smoke_matrix_plan("gdrive,dropbox", "graph")
+
+
+def test_live_smoke_matrix_summary_aggregates_provider_artifacts(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "dropbox", "auth_failed", "auth_test", 1)
+
+    summary = build_live_smoke_matrix_summary(
+        artifacts_root=tmp_path / "artifacts",
+        providers=["gdrive", "dropbox", "graph"],
+        required_providers=["gdrive", "dropbox"],
+    )
+
+    assert summary.version == LIVE_SMOKE_MATRIX_SUMMARY_VERSION
+    assert summary.gate_passed is False
+    assert summary.successful_providers == ["gdrive"]
+    assert "dropbox" in summary.failed_providers
+    assert "graph" in summary.missing_providers
+    assert summary.provider_results[0].provider == "gdrive"
+    markdown = render_live_smoke_matrix_markdown(summary)
+    assert "Gate passed: `false`" in markdown
+    assert "Provider: `dropbox`" in markdown
+
+
+def test_live_smoke_matrix_script_gate_writes_summary_and_fails_for_required_provider(tmp_path):
+    _write_matrix_provider_artifacts(tmp_path, "gdrive", "success", "drive_smoke_test", 0)
+    _write_matrix_provider_artifacts(tmp_path, "graph", "token_resolution_failed", "auth_test", 1)
+    out_dir = tmp_path / "matrix_out"
+
+    exit_code = live_smoke_matrix_main(
+        [
+            "gate",
+            "--providers",
+            "gdrive,graph",
+            "--required-providers",
+            "gdrive,graph",
+            "--artifacts-root",
+            str(tmp_path / "artifacts"),
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    assert exit_code == 1
+    payload = json.loads((out_dir / "live_smoke_matrix_summary.json").read_text(encoding="utf-8"))
+    assert payload["gate_passed"] is False
+    assert payload["failed_providers"] == ["graph"]
+    markdown = (out_dir / "live_smoke_matrix_summary.md").read_text(encoding="utf-8")
+    assert "Required providers: `gdrive, graph`" in markdown
+
+
+def test_live_smoke_matrix_script_plan_writes_normalized_plan(tmp_path):
+    out_dir = tmp_path / "plan_out"
+
+    exit_code = live_smoke_matrix_main(
+        [
+            "plan",
+            "--providers",
+            "dropbox, gdrive, dropbox",
+            "--required-providers",
+            "gdrive",
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    payload = json.loads((out_dir / "live_smoke_matrix_plan.json").read_text(encoding="utf-8"))
+    assert payload["providers"] == ["dropbox", "gdrive"]
+    assert payload["required_providers"] == ["gdrive"]

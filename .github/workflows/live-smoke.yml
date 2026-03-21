@@ -3,14 +3,14 @@ name: live-provider-smoke
 on:
   workflow_dispatch:
     inputs:
-      provider:
-        description: Cloud provider to smoke test
+      providers:
+        description: Providers to smoke test (comma-separated or 'all')
         required: true
-        type: choice
-        options:
-          - gdrive
-          - dropbox
-          - graph
+        default: gdrive,dropbox,graph
+      required_providers:
+        description: Providers that must pass the release gate (blank defaults to the selected providers)
+        required: false
+        default: ""
       query:
         description: Query string used to find the remote ZIP
         required: true
@@ -20,13 +20,56 @@ permissions:
   contents: read
 
 concurrency:
-  group: live-provider-smoke-${{ github.ref }}-${{ inputs.provider }}
+  group: live-provider-smoke-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      providers_json: ${{ steps.plan.outputs.providers_json }}
+      required_providers_json: ${{ steps.plan.outputs.required_providers_json }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and dev dependencies
+        shell: bash
+        run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
+
+      - name: Build live smoke matrix plan
+        id: plan
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ./out
+          python ./scripts/live_smoke_matrix.py plan \
+            --providers "${{ inputs.providers }}" \
+            --required-providers "${{ inputs.required_providers }}" \
+            --out-dir ./out
+          cat ./out/live_smoke_matrix_plan.md >> "$GITHUB_STEP_SUMMARY"
+          python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+payload = json.loads(Path("./out/live_smoke_matrix_plan.json").read_text(encoding="utf-8"))
+with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+    handle.write(f"providers_json={json.dumps(payload['providers'])}\n")
+    handle.write(f"required_providers_json={json.dumps(payload['required_providers'])}\n")
+PY
+
   smoke:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        provider: ${{ fromJson(needs.plan.outputs.providers_json) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,7 +90,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p ./out/logs
-          case "${{ inputs.provider }}" in
+          case "${{ matrix.provider }}" in
             gdrive)
               TOKEN="${GDRIVE_ACCESS_TOKEN:-}"
               ;;
@@ -59,14 +102,14 @@ jobs:
               ;;
             *)
               TOKEN=""
-              echo "Unsupported provider: ${{ inputs.provider }}" > ./out/logs/preflight.stderr.log
+              echo "Unsupported provider: ${{ matrix.provider }}" > ./out/logs/preflight.stderr.log
               ;;
           esac
 
           if [ -n "$TOKEN" ]; then
             echo "::add-mask::$TOKEN"
           else
-            echo "Missing token secret for provider ${{ inputs.provider }}" > ./out/logs/preflight.stderr.log
+            echo "Missing token secret for provider ${{ matrix.provider }}" > ./out/logs/preflight.stderr.log
           fi
 
           TOKEN_COMMAND_PATH="$RUNNER_TEMP/live_smoke_token_command.py"
@@ -96,7 +139,7 @@ PY
           set +e
           mkdir -p ./out/logs ./out/remote_extracted ./out/remote_reports ./out/remote_audit ./out/remote_monitoring
           python -m start_here_extractor.cli \
-            --cloud-provider "${{ inputs.provider }}" \
+            --cloud-provider "${{ matrix.provider }}" \
             --cloud-access-token-command "$LIVE_SMOKE_TOKEN_COMMAND" \
             --cloud-query "${{ inputs.query }}" \
             --output-dir ./out/remote_extracted \
@@ -120,7 +163,7 @@ PY
         run: |
           set -euo pipefail
           python ./scripts/live_smoke_summary.py \
-            --provider "${{ inputs.provider }}" \
+            --provider "${{ matrix.provider }}" \
             --query "${{ inputs.query }}" \
             --cli-exit-code "${{ steps.smoke.outputs.cli_exit_code || '1' }}" \
             --out-dir ./out \
@@ -142,7 +185,7 @@ PY
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: live-smoke-${{ inputs.provider }}
+          name: live-smoke-${{ matrix.provider }}
           path: out/
 
       - name: Enforce smoke success
@@ -163,3 +206,67 @@ if not contract.get("valid"):
 if not summary.get("success"):
     raise SystemExit(1)
 PY
+
+  release-gate:
+    needs:
+      - plan
+      - smoke
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package and dev dependencies
+        shell: bash
+        run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
+
+      - name: Download smoke artifacts
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+          pattern: live-smoke-*
+          merge-multiple: false
+
+      - name: Build matrix release gate summary
+        id: gate
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          mkdir -p ./out
+          python ./scripts/live_smoke_matrix.py gate \
+            --providers "${{ inputs.providers }}" \
+            --required-providers "${{ inputs.required_providers }}" \
+            --artifacts-root ./artifacts \
+            --out-dir ./out
+          GATE_EXIT_CODE=$?
+          set -e
+          echo "gate_exit_code=$GATE_EXIT_CODE" >> "$GITHUB_OUTPUT"
+          cat ./out/live_smoke_matrix_summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: List gate outputs
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          find ./artifacts -maxdepth 4 -type f | sort || true
+          find ./out -maxdepth 2 -type f | sort
+
+      - name: Upload gate artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-smoke-gate
+          path: out/
+
+      - name: Enforce release gate
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "${{ steps.gate.outputs.gate_exit_code || '1' }}" = "0"
