@@ -41,6 +41,16 @@ from start_here_extractor.adapter_execution import (
     ADAPTER_EXECUTION_ROLLUP_SCHEMA_VERSION,
     apply_adapter_execution_outcomes,
 )
+from start_here_extractor.adapter_runners import (
+    ADAPTER_RUNNER_JOBS_SCHEMA_VERSION,
+    ADAPTER_RUNNER_REVIEW_QUEUE_SCHEMA_VERSION,
+    ADAPTER_RUNNER_ROLLUP_SCHEMA_VERSION,
+    EXTERNAL_OUTCOME_DECISIONS_SCHEMA_VERSION,
+    EXTERNAL_OUTCOME_REVIEW_QUEUE_SCHEMA_VERSION,
+    EXTERNAL_OUTCOME_ROLLUP_SCHEMA_VERSION,
+    build_adapter_runner_job_artifacts,
+    collect_adapter_execution_outcomes,
+)
 
 
 def sample_inventory_record() -> dict:
@@ -155,6 +165,22 @@ def sample_adapter_catalog() -> list[dict]:
     ]
 
 
+def sample_runner_catalog() -> list[dict]:
+    return [
+        {
+            "runner_key": "ops-core-dry-run-stub",
+            "runner_family": "job-stub",
+            "runner_version": "1.0",
+            "stub_kind": "json-envelope",
+            "dispatch_transport": "json-envelope",
+            "supported_adapter_families": ["ledger"],
+            "supported_execution_modes": ["dry_run", "execute"],
+            "supported_target_systems": ["ops-core"],
+            "supported_operations": ["upsert-evidence-record"],
+        }
+    ]
+
+
 def build_sample_approved_record() -> dict:
     record = build_sample_ingestion_record()
     queue = build_sample_queue(record)
@@ -205,6 +231,14 @@ def build_sample_contracts_doc() -> dict:
     assert review_queue["item_count"] == 0
     assert contracts_doc["contract_count"] == 1
     return contracts_doc
+
+
+def build_sample_runner_jobs_doc() -> dict:
+    contracts_doc = build_sample_contracts_doc()
+    jobs_doc, review_queue, _ = build_adapter_runner_job_artifacts(contracts_doc, sample_runner_catalog())
+    assert review_queue["item_count"] == 0
+    assert jobs_doc["job_count"] == 1
+    return jobs_doc
 
 
 def test_build_ingestion_record_preserves_generic_backbone_fields():
@@ -1332,3 +1366,159 @@ def test_apply_adapter_execution_outcomes_script_writes_projection_journal_and_r
     assert journal_rows[0]["execution_status"] == "dry_run_succeeded"
     assert contracts_doc["contracts"][0]["contract_state"] == "validated"
     assert rollup["execution_status_counts"]["dry_run_succeeded"] == 1
+
+
+def test_build_adapter_runner_job_artifacts_creates_pending_dispatch_job():
+    contracts_doc = build_sample_contracts_doc()
+    jobs_doc, review_queue, rollup = build_adapter_runner_job_artifacts(contracts_doc, sample_runner_catalog())
+
+    assert jobs_doc["schema_version"] == ADAPTER_RUNNER_JOBS_SCHEMA_VERSION
+    assert jobs_doc["job_count"] == 1
+    job = jobs_doc["jobs"][0]
+    assert job["state"] == "pending_dispatch"
+    assert job["dispatch_ref"].startswith("adapter-runner://runner-job-")
+    assert job["runner"]["runner_key"] == "ops-core-dry-run-stub"
+    assert job["outcome_collection_key"].startswith("outcome-")
+    assert review_queue["schema_version"] == ADAPTER_RUNNER_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == ADAPTER_RUNNER_ROLLUP_SCHEMA_VERSION
+    assert rollup["job_count"] == 1
+    assert rollup["runner_family_counts"]["job-stub"] == 1
+
+
+
+def test_build_adapter_runner_job_artifacts_creates_review_queue_when_runner_missing():
+    contracts_doc = build_sample_contracts_doc()
+    jobs_doc, review_queue, rollup = build_adapter_runner_job_artifacts(contracts_doc, [])
+
+    assert jobs_doc["job_count"] == 0
+    assert review_queue["item_count"] == 1
+    item = review_queue["items"][0]
+    assert "no_runner_match" in item["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_collect_adapter_execution_outcomes_builds_decision_for_successful_payload():
+    jobs_doc = build_sample_runner_jobs_doc()
+    job = jobs_doc["jobs"][0]
+    payloads = [
+        {
+            "runner_job_id": job["runner_job_id"],
+            "outcome_status": "success",
+            "executed_by": "runner-worker-1",
+            "reason": "External dry-run stub completed successfully",
+            "external_ref": "stub-run-001",
+        }
+    ]
+
+    decisions_doc, review_queue, rollup = collect_adapter_execution_outcomes(jobs_doc, payloads, actor_id="collector-1")
+
+    assert decisions_doc["schema_version"] == EXTERNAL_OUTCOME_DECISIONS_SCHEMA_VERSION
+    assert decisions_doc["decision_count"] == 1
+    decision = decisions_doc["decisions"][0]
+    assert decision["outcome_action"] == "dry_run_success"
+    assert decision["executed_by"] == "runner-worker-1"
+    assert decision["runner_job_id"] == job["runner_job_id"]
+    assert review_queue["schema_version"] == EXTERNAL_OUTCOME_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == EXTERNAL_OUTCOME_ROLLUP_SCHEMA_VERSION
+    assert rollup["outcome_action_counts"]["dry_run_success"] == 1
+
+
+
+def test_collect_adapter_execution_outcomes_queues_unmatched_payload():
+    jobs_doc = build_sample_runner_jobs_doc()
+    payloads = [{"runner_job_id": "runner-job-missing", "outcome_status": "success"}]
+
+    decisions_doc, review_queue, rollup = collect_adapter_execution_outcomes(jobs_doc, payloads, actor_id="collector-2")
+
+    assert decisions_doc["decision_count"] == 0
+    assert review_queue["item_count"] == 1
+    item = review_queue["items"][0]
+    assert "no_matching_runner_job" in item["reason_codes"]
+    assert rollup["review_queue_count"] == 1
+
+
+
+def test_adapter_runner_and_external_outcome_scripts_write_expected_artifacts(tmp_path: Path):
+    contracts_path = tmp_path / "adapter_execution_contracts.json"
+    contracts_path.write_text(json.dumps(build_sample_contracts_doc(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    runner_catalog_path = tmp_path / "runner_catalog.json"
+    runner_catalog_path.write_text(json.dumps({"runners": sample_runner_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    jobs_dir = tmp_path / "runner_jobs"
+    outcomes_dir = tmp_path / "outcomes"
+
+    jobs_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_adapter_runner_jobs.py",
+            "--contracts-path",
+            str(contracts_path),
+            "--runner-catalog-path",
+            str(runner_catalog_path),
+            "--out-dir",
+            str(jobs_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert jobs_proc.returncode == 0, jobs_proc.stderr
+
+    jobs_doc = json.loads((jobs_dir / "adapter_runner_jobs.json").read_text(encoding="utf-8"))
+    payloads_path = tmp_path / "external_outcomes.json"
+    payloads_path.write_text(
+        json.dumps(
+            {
+                "outcomes": [
+                    {
+                        "runner_job_id": jobs_doc["jobs"][0]["runner_job_id"],
+                        "outcome_status": "success",
+                        "executed_by": "runner-worker-script",
+                        "reason": "Dry-run stub completed",
+                    }
+                ]
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    collect_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/collect_adapter_execution_outcomes.py",
+            "--runner-jobs-path",
+            str(jobs_dir / "adapter_runner_jobs.json"),
+            "--payloads-path",
+            str(payloads_path),
+            "--out-dir",
+            str(outcomes_dir),
+            "--actor-id",
+            "collector-script-1",
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert collect_proc.returncode == 0, collect_proc.stderr
+    decisions_path = outcomes_dir / "collected_adapter_execution_decisions.json"
+    review_queue_path = outcomes_dir / "external_outcome_review_queue.json"
+    rollup_path = outcomes_dir / "external_outcome_rollup.json"
+    assert decisions_path.exists()
+    assert review_queue_path.exists()
+    assert rollup_path.exists()
+
+    decisions_doc = json.loads(decisions_path.read_text(encoding="utf-8"))
+    review_queue = json.loads(review_queue_path.read_text(encoding="utf-8"))
+    rollup = json.loads(rollup_path.read_text(encoding="utf-8"))
+    assert decisions_doc["decision_count"] == 1
+    assert decisions_doc["decisions"][0]["outcome_action"] == "dry_run_success"
+    assert review_queue["item_count"] == 0
+    assert rollup["outcome_action_counts"]["dry_run_success"] == 1

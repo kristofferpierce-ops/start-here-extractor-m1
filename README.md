@@ -389,3 +389,25 @@ The `scripts/apply_adapter_execution_outcomes.py` helper takes planned adapter c
 - `adapter_execution_rollup.md`
 
 This keeps execution explainable and future-safe. Adapter outcomes are journaled separately, projected back into derived ingestion state, and can mark follow-up review without mutating raw evidence or provenance.
+
+## M5C Block 7 adapter runner stubs and external outcome collector scaffolding
+
+The `scripts/build_adapter_runner_jobs.py` helper turns runnable adapter contracts into dispatchable runner-job envelopes using an external runner catalog. It writes:
+
+- `adapter_runner_jobs.json`
+- `adapter_runner_jobs.md`
+- `adapter_runner_review_queue.json`
+- `adapter_runner_review_queue.md`
+- `adapter_runner_rollup.json`
+- `adapter_runner_rollup.md`
+
+The companion `scripts/collect_adapter_execution_outcomes.py` helper turns external runner payloads into normalized adapter execution decisions that can feed the Block 6 execution-ingestion step. It writes:
+
+- `collected_adapter_execution_decisions.json`
+- `collected_adapter_execution_decisions.md`
+- `external_outcome_review_queue.json`
+- `external_outcome_review_queue.md`
+- `external_outcome_rollup.json`
+- `external_outcome_rollup.md`
+
+This keeps execution target-neutral while adding a clean bridge from planned contracts to runnable jobs and then back from external outcomes into deterministic internal decisions.
