@@ -6,7 +6,9 @@ from start_here_extractor.cloud.auth import build_access_token_provider, resolve
 from start_here_extractor.cloud.base import RemoteSearchQuery
 from start_here_extractor.cloud.gdrive import GoogleDriveAuthConfig, GoogleDriveLocator
 from start_here_extractor.cloud.http import HttpResponse
-from start_here_extractor.errors import RemoteAuthError
+from start_here_extractor.errors import RemoteAuthError, RemoteRateLimitError
+from start_here_extractor.reporter import build_inventory_record
+from start_here_extractor.types import RetryPolicy
 
 
 class CommandSequenceRunner:
@@ -29,6 +31,21 @@ class AuthRefreshingRequestor:
         self.calls.append(str(auth_header))
         if auth_header == "Bearer old-token":
             raise RemoteAuthError("expired", status_code=401, headers={})
+        return HttpResponse(
+            status_code=200,
+            headers={"Content-Type": "application/json"},
+            body=b'{"files": []}',
+        )
+
+
+class RateLimitedThenSuccessRequestor:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, method, url, headers=None, data=None, timeout=30.0):
+        self.calls += 1
+        if self.calls == 1:
+            raise RemoteRateLimitError("too-many-requests", retry_after_seconds=0, status_code=429, headers={"Retry-After": "0"})
         return HttpResponse(
             status_code=200,
             headers={"Content-Type": "application/json"},
@@ -82,3 +99,92 @@ def test_gdrive_search_refreshes_command_token_after_auth_failure():
     assert page_token is None
     assert requestor.calls == ["Bearer old-token", "Bearer new-token"]
     assert provider.public_state()["refresh_count"] == 1
+    runtime = locator.runtime_state()
+    assert runtime["auth_refresh_count"] == 1
+    assert runtime["auth_state"] == "fresh"
+    assert "provider-auth-refresh" in runtime["notes"]
+
+
+def test_gdrive_search_records_rate_limit_and_retry_telemetry():
+    locator = GoogleDriveLocator(
+        GoogleDriveAuthConfig(access_token="static-token"),
+        requestor=RateLimitedThenSuccessRequestor(),
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0, jitter_seconds=0.0),
+    )
+
+    candidates, page_token = locator.search(RemoteSearchQuery(text="start here"))
+
+    assert candidates == []
+    assert page_token is None
+    runtime = locator.runtime_state()
+    assert runtime["request_count"] == 1
+    assert runtime["success_count"] == 1
+    assert runtime["quota"]["rate_limited"] is True
+    assert runtime["quota"]["throttle_count"] == 1
+    assert runtime["quota"]["last_status_code"] == 429
+    assert runtime["retry"]["observed_retries"] == 1
+    assert runtime["retry"]["last_reason"] == "retry-after"
+    assert runtime["retry"]["policy"]["max_attempts"] == 2
+    assert "provider-rate-limited" in runtime["notes"]
+
+
+def test_inventory_monitoring_includes_provider_health_and_quota_state():
+    record = build_inventory_record(
+        {
+            "zip_file": {"path": "C:/tmp/example.zip", "md5": "abc"},
+            "selected_candidate": {"name": "START HERE.txt"},
+            "extracted_file": {"path": "C:/tmp/out/START HERE.txt", "size_bytes": 12, "md5": "def"},
+            "preview": {"text": "hello", "encoding": "utf-8"},
+            "_runtime_cloud": {
+                "token_health": {
+                    "source": "command",
+                    "status": "fresh",
+                    "refresh_count": 1,
+                    "notes": ["token-near-expiry"],
+                },
+                "provider_health": {
+                    "provider": "gdrive",
+                    "auth_state": "fresh",
+                    "auth_refresh_count": 1,
+                    "request_count": 2,
+                    "success_count": 1,
+                    "error_count": 0,
+                    "last_operation": "download",
+                    "last_status_code": 200,
+                    "notes": ["provider-rate-limited"],
+                    "quota": {
+                        "rate_limited": True,
+                        "throttle_count": 2,
+                        "retry_after_seconds": 0.0,
+                        "last_status_code": 429,
+                        "last_reason": "retry-after",
+                        "last_event_at": "2030-01-01T00:00:00+00:00",
+                    },
+                    "retry": {
+                        "observed_retries": 2,
+                        "last_delay_seconds": 0.0,
+                        "last_reason": "retry-after",
+                        "last_attempt": 2,
+                        "exhausted": False,
+                        "last_event_at": "2030-01-01T00:00:00+00:00",
+                        "policy": {
+                            "max_attempts": 3,
+                            "base_delay_seconds": 0.25,
+                            "max_delay_seconds": 5.0,
+                            "jitter_seconds": 0.0,
+                        },
+                    },
+                },
+            },
+        }
+    )
+
+    provider_state = record["monitoring"]["provider_state"]
+    assert provider_state["auth_state"] == "fresh"
+    assert provider_state["rate_limited"] is True
+    assert provider_state["quota"]["throttle_count"] == 2
+    assert provider_state["retry"]["observed_retries"] == 2
+    assert record["monitoring"]["provider_health"]["provider"] == "gdrive"
+    assert record["monitoring"]["review_required"] is True
+    assert "provider-rate-limited" in record["warnings"]
+    assert "token-near-expiry" in record["warnings"]

@@ -12,7 +12,7 @@ from .jsonl import append_jsonl
 from .locator import discover_zip_paths
 from .processor import process_zip
 from .reporter import build_inventory_record, write_inventory
-from .types import ExtractSettings, Limits, MatchPolicy
+from .types import ExtractSettings, Limits, MatchPolicy, RetryPolicy
 from .utils import ensure_dir, safe_slug
 
 
@@ -121,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--durable-monitoring", action="store_true", help="fsync monitoring JSONL writes")
     parser.add_argument("--monitoring-stream-name", default="monitoring-events", help="Monitoring JSONL stream name without extension")
     parser.add_argument("--graph-drive-scope", default="me/drive/root", help="Microsoft Graph drive scope, for example me/drive/root")
+    parser.add_argument("--cloud-retry-max-attempts", type=int, default=3, help="Maximum retry attempts for cloud provider operations")
+    parser.add_argument("--cloud-retry-base-delay-seconds", type=float, default=0.25, help="Base retry delay for cloud provider operations")
+    parser.add_argument("--cloud-retry-max-delay-seconds", type=float, default=5.0, help="Maximum retry delay for cloud provider operations")
+    parser.add_argument("--cloud-retry-jitter-seconds", type=float, default=0.0, help="Additional jitter added to cloud retry delays")
     return parser
 
 
@@ -128,6 +132,24 @@ def _collect_local_zip_paths(args: argparse.Namespace) -> list[Path]:
     return discover_zip_paths(args.paths, args.root, allow_symlink_traversal=args.allow_symlink_traversal)
 
 
+
+
+def _cloud_retry_policy_from_args(args: argparse.Namespace) -> RetryPolicy:
+    return RetryPolicy(
+        max_attempts=max(1, int(args.cloud_retry_max_attempts)),
+        base_delay_seconds=max(0.0, float(args.cloud_retry_base_delay_seconds)),
+        max_delay_seconds=max(0.0, float(args.cloud_retry_max_delay_seconds)),
+        jitter_seconds=max(0.0, float(args.cloud_retry_jitter_seconds)),
+    )
+
+
+def _locator_runtime_state(locator: object, token_provider) -> dict[str, object]:
+    token_health = token_provider.public_state() if token_provider is not None else None
+    provider_health = None
+    runtime_state = getattr(locator, "runtime_state", None)
+    if callable(runtime_state):
+        provider_health = runtime_state()
+    return {"token_health": token_health, "provider_health": provider_health}
 def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[tuple[Path, dict[str, object], dict[str, object]]]:
     token_provider = build_access_token_provider(
         access_token=args.cloud_access_token,
@@ -149,6 +171,7 @@ def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[
         acknowledge_abuse=bool(args.cloud_acknowledge_abuse),
         operator_approval_ref=args.cloud_operator_approval_ref,
         require_operator_approval_for_abuse=bool(args.cloud_require_operator_approval_for_abuse),
+        retry_policy=_cloud_retry_policy_from_args(args),
     )
     locator = build_locator(cloud_cfg)
     candidates = search_remote_candidates(locator, cloud_cfg)
@@ -162,7 +185,7 @@ def _collect_remote_targets(args: argparse.Namespace, output_dir: Path) -> list[
     for candidate in selected:
         local_path = Path(locator.download(candidate, str(download_root)))
         provenance = provenance_for_candidate(candidate, local_path, fetched_at=fetched_at, source_path=None)
-        runtime_cloud = {"token_health": token_provider.public_state()}
+        runtime_cloud = _locator_runtime_state(locator, token_provider)
         targets.append((local_path, provenance, runtime_cloud))
     return targets
 

@@ -246,11 +246,26 @@ def build_access_token_provider(
     raise TokenResolutionError("missing-cloud-access-token")
 
 
-def run_with_auth_retry(action: Callable[[], T], provider: AccessTokenProvider | None = None) -> T:
+def run_with_auth_retry(
+    action: Callable[[], T],
+    provider: AccessTokenProvider | None = None,
+    *,
+    on_auth_retry: Callable[[RemoteAuthError], None] | None = None,
+    on_auth_failure: Callable[[RemoteAuthError], None] | None = None,
+) -> T:
     try:
         return action()
-    except RemoteAuthError:
+    except RemoteAuthError as exc:
         if provider is None or not provider.refreshable:
+            if on_auth_failure is not None:
+                on_auth_failure(exc)
             raise
+        if on_auth_retry is not None:
+            on_auth_retry(exc)
         provider.get_token(force_refresh=True)
-        return action()
+        try:
+            return action()
+        except RemoteAuthError as retry_exc:
+            if on_auth_failure is not None:
+                on_auth_failure(retry_exc)
+            raise

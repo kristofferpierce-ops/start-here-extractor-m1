@@ -6,10 +6,11 @@ from typing import Optional
 from urllib.parse import urlencode
 
 from ..errors import OperatorApprovalRequiredError, RemoteProviderError
-from ..types import RetryPolicy
+from ..types import RetryDecision, RetryPolicy
 from .auth import AccessTokenProvider, run_with_auth_retry
 from .base import RemoteLocator, RemoteSearchQuery, RemoteZipCandidate, decode_download_hint, encode_download_hint
 from .http import Requestor, atomic_download, request_json, urllib_requestor
+from .telemetry import CloudProviderRuntimeState
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,10 @@ class GoogleDriveLocator(RemoteLocator):
         self._auth = auth
         self._requestor = requestor
         self._retry_policy = retry_policy
+        self._runtime = CloudProviderRuntimeState(self.provider, retry_policy=retry_policy)
+
+    def runtime_state(self) -> dict[str, object]:
+        return self._runtime.public_state(token_provider=self._auth.access_token_provider)
 
     def _auth_headers(self) -> dict[str, str]:
         token = self._auth.access_token_provider.get_token() if self._auth.access_token_provider else self._auth.access_token
@@ -59,12 +64,30 @@ class GoogleDriveLocator(RemoteLocator):
             params['pageToken'] = page_token
         return urlencode(params)
 
+    def _record_retry(self, operation: str, decision: RetryDecision, exc: Exception) -> None:
+        self._runtime.record_retry(operation, decision, exc)
+
     def search(self, query: RemoteSearchQuery, *, page_token: Optional[str] = None, page_size: int = 100) -> tuple[list[RemoteZipCandidate], Optional[str]]:
+        operation = 'search'
+        self._runtime.record_operation_start(operation, token_provider=self._auth.access_token_provider)
         url = 'https://www.googleapis.com/drive/v3/files?' + self._query_string(query, page_size, page_token)
-        payload = run_with_auth_retry(
-            lambda: request_json('GET', url, headers=self._auth_headers(), timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
-            self._auth.access_token_provider,
-        )
+        try:
+            payload = run_with_auth_retry(
+                lambda: request_json(
+                    'GET',
+                    url,
+                    headers=self._auth_headers(),
+                    timeout=self._auth.timeout_seconds,
+                    requestor=self._requestor,
+                    retry_policy=self._retry_policy,
+                    on_retry=lambda decision, exc: self._record_retry(operation, decision, exc),
+                ),
+                self._auth.access_token_provider,
+                on_auth_retry=lambda exc: self._runtime.record_auth_retry(operation, exc, token_provider=self._auth.access_token_provider),
+            )
+        except Exception as exc:
+            self._runtime.record_failure(operation, exc, token_provider=self._auth.access_token_provider)
+            raise
         items = payload.get('files', [])
         if not isinstance(items, list):
             raise RemoteProviderError('gdrive-files-not-a-list')
@@ -94,10 +117,13 @@ class GoogleDriveLocator(RemoteLocator):
                     etag=item.get('md5Checksum'),
                 )
             )
+        self._runtime.record_success(operation, token_provider=self._auth.access_token_provider, status_code=200)
         next_page = payload.get('nextPageToken')
         return candidates, str(next_page) if next_page else None
 
     def download(self, candidate: RemoteZipCandidate, dest_dir: str) -> str:
+        operation = 'download'
+        self._runtime.record_operation_start(operation, token_provider=self._auth.access_token_provider)
         hint = decode_download_hint(candidate.download_hint)
         if hint.get('can_download') is False:
             raise RemoteProviderError('gdrive-canDownload-false')
@@ -108,7 +134,23 @@ class GoogleDriveLocator(RemoteLocator):
             params['acknowledgeAbuse'] = 'true'
         url = f'https://www.googleapis.com/drive/v3/files/{candidate.id}?' + urlencode(params)
         dest_path = Path(dest_dir) / candidate.name
-        return run_with_auth_retry(
-            lambda: atomic_download('GET', url, headers=self._auth_headers(), dest_path=dest_path, timeout=self._auth.timeout_seconds, requestor=self._requestor, retry_policy=self._retry_policy),
-            self._auth.access_token_provider,
-        )
+        try:
+            local_path = run_with_auth_retry(
+                lambda: atomic_download(
+                    'GET',
+                    url,
+                    headers=self._auth_headers(),
+                    dest_path=dest_path,
+                    timeout=self._auth.timeout_seconds,
+                    requestor=self._requestor,
+                    retry_policy=self._retry_policy,
+                    on_retry=lambda decision, exc: self._record_retry(operation, decision, exc),
+                ),
+                self._auth.access_token_provider,
+                on_auth_retry=lambda exc: self._runtime.record_auth_retry(operation, exc, token_provider=self._auth.access_token_provider),
+            )
+        except Exception as exc:
+            self._runtime.record_failure(operation, exc, token_provider=self._auth.access_token_provider)
+            raise
+        self._runtime.record_success(operation, token_provider=self._auth.access_token_provider, status_code=200)
+        return local_path

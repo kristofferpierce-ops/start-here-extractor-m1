@@ -67,10 +67,17 @@ def build_inventory_record(
             if note and note not in warnings:
                 warnings.append(str(note))
     token_health = runtime_cloud.get("token_health") if isinstance(runtime_cloud, dict) else None
+    provider_health = runtime_cloud.get("provider_health") if isinstance(runtime_cloud, dict) else None
     if isinstance(token_health, dict):
         token_health = redact_sensitive_fields(token_health)
+    if isinstance(provider_health, dict):
+        provider_health = redact_sensitive_fields(provider_health)
     if isinstance(token_health, dict):
         for note in token_health.get("notes") or []:
+            if note not in warnings:
+                warnings.append(str(note))
+    if isinstance(provider_health, dict):
+        for note in provider_health.get("notes") or []:
             if note not in warnings:
                 warnings.append(str(note))
     record["warnings"] = warnings
@@ -149,7 +156,7 @@ def build_inventory_record(
         monitoring_stream_ref=monitoring_stream_ref,
         token_health=token_health,
     )
-    record["monitoring"] = record.get("monitoring") or build_monitoring_block(record, token_health=token_health)
+    record["monitoring"] = record.get("monitoring") or build_monitoring_block(record, token_health=token_health, provider_health=provider_health)
     if monitoring_dir is not None:
         record["monitoring_ref"] = monitoring_append(record, monitoring_dir, durable=durable_monitoring, stream_name=monitoring_stream_name)
         monitoring_stream_ref = f"monitoring://{(monitoring_dir / f'{monitoring_stream_name}.jsonl').as_posix()}"

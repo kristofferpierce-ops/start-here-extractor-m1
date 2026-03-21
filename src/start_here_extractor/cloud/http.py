@@ -10,7 +10,7 @@ from urllib import error, request
 
 from ..errors import RemoteAuthError, RemoteNotFoundError, RemoteProviderError, RemoteRateLimitError, RetryableOperationError
 from ..net.retry import with_retries
-from ..types import RetryPolicy
+from ..types import RetryDecision, RetryPolicy
 
 
 @dataclass(frozen=True)
@@ -65,6 +65,7 @@ def request_json(
     timeout: float = 30.0,
     requestor: Requestor = urllib_requestor,
     retry_policy: RetryPolicy | None = None,
+    on_retry: Callable[[RetryDecision, Exception], None] | None = None,
 ) -> dict[str, object]:
     final_headers = {"Accept": "application/json", **dict(headers or {})}
     body: bytes | None = None
@@ -75,7 +76,7 @@ def request_json(
     def _do() -> HttpResponse:
         return requestor(method, url, final_headers, body, timeout)
 
-    response = with_retries(_do, policy=retry_policy)
+    response = with_retries(_do, policy=retry_policy, on_retry=on_retry)
     parsed = response.json()
     if not isinstance(parsed, dict):
         raise RemoteProviderError("json-response-was-not-an-object", status_code=response.status_code, headers=response.headers)
@@ -91,6 +92,7 @@ def atomic_download(
     timeout: float = 30.0,
     requestor: Requestor = urllib_requestor,
     retry_policy: RetryPolicy | None = None,
+    on_retry: Callable[[RetryDecision, Exception], None] | None = None,
 ) -> str:
     dest = Path(dest_path)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +100,7 @@ def atomic_download(
     def _do() -> HttpResponse:
         return requestor(method, url, dict(headers or {}), None, timeout)
 
-    response = with_retries(_do, policy=retry_policy)
+    response = with_retries(_do, policy=retry_policy, on_retry=on_retry)
     fd, tmp_name = tempfile.mkstemp(prefix=dest.name + '.', suffix='.part', dir=str(dest.parent))
     try:
         with os.fdopen(fd, 'wb') as handle:

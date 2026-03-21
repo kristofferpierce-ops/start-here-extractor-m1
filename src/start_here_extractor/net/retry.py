@@ -63,6 +63,7 @@ def with_retries(
     policy: RetryPolicy | None = None,
     should_retry: Callable[[Exception], bool] | None = None,
     sleep_fn: Callable[[float], None] = time.sleep,
+    on_retry: Callable[[RetryDecision, Exception], None] | None = None,
 ) -> T:
     retry_policy = policy or RetryPolicy()
     retry_filter = should_retry or (lambda exc: isinstance(exc, RetryableOperationError))
@@ -77,5 +78,7 @@ def with_retries(
             decision = compute_retry_decision(exc, attempt, retry_policy)
             if not decision.should_retry:
                 raise
+            if on_retry is not None:
+                on_retry(decision, exc)
             sleep_fn(decision.delay_seconds)
             attempt += 1
