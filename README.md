@@ -592,3 +592,20 @@ Block 17 adds M5C closeout packs and Milestone 5 completion packs on top of the 
 - `milestone5_completion_packs.json`
 - `milestone5_completion_review_queue.json`
 - `milestone5_completion_rollup.json`
+
+
+## M6A Block 1
+
+Block 1 starts Milestone 6 by materializing a generalized source-control pipeline from ingestion records.
+
+### New script
+- `scripts/build_source_control_pipeline.py`
+
+### New artifacts
+- `source_records_raw.json`
+- `source_records_normalized.json`
+- `candidate_matches.json`
+- `review_items.json`
+- `approved_deltas.json`
+- `applied_state_transitions.json`
+- `source_control_pipeline_rollup.json`
