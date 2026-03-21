@@ -91,6 +91,17 @@ from start_here_extractor.target_group_adapter_packages import (
     build_target_group_adapter_package_artifacts,
     build_canonical_request_response_fixture_pack_artifacts,
 )
+from start_here_extractor.target_group_adapter_implementation_shells import (
+    TARGET_GROUP_ADAPTER_IMPLEMENTATION_SHELLS_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_IMPLEMENTATION_SHELL_REVIEW_QUEUE_SCHEMA_VERSION,
+    TARGET_GROUP_ADAPTER_IMPLEMENTATION_SHELL_ROLLUP_SCHEMA_VERSION,
+    END_TO_END_ROUNDTRIP_FIXTURE_EXECUTION_PACKS_SCHEMA_VERSION,
+    END_TO_END_ROUNDTRIP_FIXTURE_EXECUTION_REVIEW_QUEUE_SCHEMA_VERSION,
+    END_TO_END_ROUNDTRIP_FIXTURE_EXECUTION_ROLLUP_SCHEMA_VERSION,
+    build_target_group_adapter_implementation_shell_artifacts,
+    build_end_to_end_roundtrip_fixture_execution_pack_artifacts,
+)
+
 from start_here_extractor.target_group_adapter_skeletons import (
     TARGET_GROUP_ADAPTER_SKELETONS_SCHEMA_VERSION,
     TARGET_GROUP_ADAPTER_SKELETON_REVIEW_QUEUE_SCHEMA_VERSION,
@@ -337,6 +348,31 @@ def sample_target_group_adapter_skeleton_catalog() -> list[dict]:
         }
     ]
 
+
+
+
+def sample_target_group_adapter_implementation_catalog() -> list[dict]:
+    return [
+        {
+            "target_group_key": "ops-core-ledger-group",
+            "adapter_group_key": "ops-core-ledger-adapter-group",
+            "implementation_group_key": "ops-core-ledger-implementation-group",
+            "implementation_group_name": "Ops Core Ledger Implementation Group",
+            "implementation_shell_kind": "ops-core-ledger-implementation-shell",
+            "supported_target_group_keys": ["ops-core-ledger-group"],
+            "supported_adapter_group_keys": ["ops-core-ledger-adapter-group"],
+            "supported_target_systems": ["ops-core"],
+            "supported_target_types": ["evidence-ledger"],
+            "supported_operations": ["upsert-evidence-record"],
+            "supported_request_methods": ["POST"],
+            "supported_fixture_modes": ["success", "failure", "defer", "skip"],
+            "adapter_module": "start_here_extractor.adapters.ops_core_ledger",
+            "adapter_class": "OpsCoreLedgerAdapter",
+            "entrypoint": "execute",
+            "supports_live_execute": False,
+            "supports_dry_run": True,
+        }
+    ]
 
 def build_sample_approved_record() -> dict:
     record = build_sample_ingestion_record()
@@ -2310,4 +2346,132 @@ def test_target_group_skeleton_and_roundtrip_scripts_write_expected_artifacts(tm
     skeletons_doc = json.loads((skeletons_dir / "target_group_adapter_skeletons.json").read_text(encoding="utf-8"))
     rollup = json.loads((roundtrip_dir / "roundtrip_normalization_rollup.json").read_text(encoding="utf-8"))
     assert skeletons_doc["skeleton_count"] == 1
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+
+def build_sample_target_group_adapter_implementation_shells_doc() -> dict:
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+    shells_doc, shell_review_queue, _ = build_target_group_adapter_implementation_shell_artifacts(
+        skeletons_doc,
+        cases_doc,
+        sample_target_group_adapter_implementation_catalog(),
+    )
+    assert shell_review_queue["item_count"] == 0
+    assert shells_doc["shell_count"] == 1
+    return shells_doc
+
+
+def test_build_target_group_adapter_implementation_shell_artifacts_creates_shell():
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+
+    shells_doc, review_queue, rollup = build_target_group_adapter_implementation_shell_artifacts(
+        skeletons_doc,
+        cases_doc,
+        sample_target_group_adapter_implementation_catalog(),
+    )
+
+    assert shells_doc["schema_version"] == TARGET_GROUP_ADAPTER_IMPLEMENTATION_SHELLS_SCHEMA_VERSION
+    assert shells_doc["shell_count"] == 1
+    shell = shells_doc["shells"][0]
+    assert shell["state"] == "implementation-shelled"
+    assert shell["implementation_group"]["implementation_group_key"] == "ops-core-ledger-implementation-group"
+    assert shell["adapter_entrypoint"]["module"] == "start_here_extractor.adapters.ops_core_ledger"
+    assert review_queue["schema_version"] == TARGET_GROUP_ADAPTER_IMPLEMENTATION_SHELL_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == TARGET_GROUP_ADAPTER_IMPLEMENTATION_SHELL_ROLLUP_SCHEMA_VERSION
+    assert rollup["implementation_group_counts"]["ops-core-ledger-implementation-group"] == 1
+
+
+def test_build_end_to_end_roundtrip_fixture_execution_pack_artifacts_creates_pack():
+    shells_doc = build_sample_target_group_adapter_implementation_shells_doc()
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc = build_sample_target_group_adapter_skeletons_doc()
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+
+    packs_doc, review_queue, rollup = build_end_to_end_roundtrip_fixture_execution_pack_artifacts(shells_doc, cases_doc)
+
+    assert packs_doc["schema_version"] == END_TO_END_ROUNDTRIP_FIXTURE_EXECUTION_PACKS_SCHEMA_VERSION
+    assert packs_doc["pack_count"] == 1
+    pack = packs_doc["packs"][0]
+    assert len(pack["cases"]) == 4
+    assert {item["fixture_mode"] for item in pack["cases"]} == {"success", "failure", "defer", "skip"}
+    assert review_queue["schema_version"] == END_TO_END_ROUNDTRIP_FIXTURE_EXECUTION_REVIEW_QUEUE_SCHEMA_VERSION
+    assert review_queue["item_count"] == 0
+    assert rollup["schema_version"] == END_TO_END_ROUNDTRIP_FIXTURE_EXECUTION_ROLLUP_SCHEMA_VERSION
+    assert rollup["fixture_mode_counts"]["success"] == 1
+
+
+def test_target_group_implementation_shell_and_execution_pack_scripts_write_expected_artifacts(tmp_path: Path):
+    packages_doc = build_sample_target_group_packages_doc()
+    fixture_packs_doc, fixture_review_queue, _ = build_canonical_request_response_fixture_pack_artifacts(packages_doc)
+    assert fixture_review_queue["item_count"] == 0
+    skeletons_doc, skeleton_review_queue, _ = build_target_group_adapter_skeleton_artifacts(packages_doc, fixture_packs_doc, sample_target_group_adapter_skeleton_catalog())
+    assert skeleton_review_queue["item_count"] == 0
+    cases_doc, case_review_queue, _ = build_roundtrip_normalization_case_artifacts(skeletons_doc, fixture_packs_doc)
+    assert case_review_queue["item_count"] == 0
+
+    skeletons_path = tmp_path / "target_group_adapter_skeletons.json"
+    skeletons_path.write_text(json.dumps(skeletons_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    cases_path = tmp_path / "roundtrip_normalization_cases.json"
+    cases_path.write_text(json.dumps(cases_doc, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    catalog_path = tmp_path / "target_group_adapter_implementation_catalog.json"
+    catalog_path.write_text(json.dumps({"target_group_adapter_implementations": sample_target_group_adapter_implementation_catalog()}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    shells_dir = tmp_path / "implementation_shells"
+    packs_dir = tmp_path / "execution_packs"
+
+    shells_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_target_group_adapter_implementation_shells.py",
+            "--target-group-adapter-skeletons-path",
+            str(skeletons_path),
+            "--roundtrip-normalization-cases-path",
+            str(cases_path),
+            "--target-group-implementation-catalog-path",
+            str(catalog_path),
+            "--out-dir",
+            str(shells_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert shells_proc.returncode == 0, shells_proc.stderr
+
+    packs_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_end_to_end_roundtrip_fixture_execution_packs.py",
+            "--target-group-adapter-implementation-shells-path",
+            str(shells_dir / "target_group_adapter_implementation_shells.json"),
+            "--roundtrip-normalization-cases-path",
+            str(cases_path),
+            "--out-dir",
+            str(packs_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert packs_proc.returncode == 0, packs_proc.stderr
+
+    shells_doc = json.loads((shells_dir / "target_group_adapter_implementation_shells.json").read_text(encoding="utf-8"))
+    rollup = json.loads((packs_dir / "end_to_end_roundtrip_fixture_execution_rollup.json").read_text(encoding="utf-8"))
+    assert shells_doc["shell_count"] == 1
     assert rollup["fixture_mode_counts"]["success"] == 1

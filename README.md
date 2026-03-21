@@ -520,3 +520,8 @@ The companion `scripts/build_roundtrip_normalization_cases.py` helper turns thos
 - `roundtrip_normalization_rollup.md`
 
 This creates a concrete target-group adapter seam for future request/response implementations while keeping the pipeline contract-driven, provenance-safe, and downstream-neutral.
+
+
+## M5C Block 13
+
+Block 13 adds target-group adapter implementation shells and end-to-end round-trip fixture execution packs. These remain contract-driven and target-neutral, preserving provenance while preparing for concrete adapter implementations in later blocks.
