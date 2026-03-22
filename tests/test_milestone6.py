@@ -528,3 +528,183 @@ def test_source_replay_plan_script_writes_expected_artifacts(tmp_path: Path) -> 
     assert rollup["replay_mode_counts"]["resume-from-approved"] == 1
     assert rollup["replay_mode_counts"]["full-replay"] == 1
     assert packs_doc["record_count"] == 3
+
+
+def test_build_source_replay_plan_artifacts_distinguishes_replay_modes() -> None:
+    readiness_documents = {
+        "lineage_replay_readiness_packs": {
+            "records": [
+                {
+                    "lineage_replay_readiness_id": "readiness-compare",
+                    "source_key": "source-compare",
+                    "durable_lineage_id": "lineage-compare",
+                    "replay_safe_ingestion_control_id": "control-compare",
+                    "migration_pack_id": "pack-compare",
+                    "readiness_state": "protected-ready",
+                    "replay_state": "replay-protected",
+                    "migration_state": "already-applied",
+                },
+                {
+                    "lineage_replay_readiness_id": "readiness-resume",
+                    "source_key": "source-resume",
+                    "durable_lineage_id": "lineage-resume",
+                    "replay_safe_ingestion_control_id": "control-resume",
+                    "migration_pack_id": "pack-resume",
+                    "readiness_state": "ready-for-replay",
+                    "replay_state": "replay-safe",
+                    "migration_state": "ready-for-apply",
+                },
+                {
+                    "lineage_replay_readiness_id": "readiness-full",
+                    "source_key": "source-full",
+                    "durable_lineage_id": "lineage-full",
+                    "replay_safe_ingestion_control_id": "control-full",
+                    "migration_pack_id": "pack-full",
+                    "readiness_state": "ready-for-replay",
+                    "replay_state": "replay-safe",
+                    "migration_state": "ready-for-review",
+                },
+            ]
+        },
+        "lineage_replay_readiness_review_queue": {"records": []},
+    }
+    control_documents = {
+        "replay_safe_ingestion_controls": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "replay_safe_ingestion_control_id": "control-compare",
+                    "replay_key": "replay-compare",
+                    "idempotency_key": "idem-compare",
+                    "replay_state": "replay-protected",
+                },
+                {
+                    "source_key": "source-resume",
+                    "replay_safe_ingestion_control_id": "control-resume",
+                    "replay_key": "replay-resume",
+                    "idempotency_key": "idem-resume",
+                    "replay_state": "replay-safe",
+                },
+                {
+                    "source_key": "source-full",
+                    "replay_safe_ingestion_control_id": "control-full",
+                    "replay_key": "replay-full",
+                    "idempotency_key": "idem-full",
+                    "replay_state": "replay-safe",
+                },
+            ]
+        },
+        "replay_safe_ingestion_review_queue": {"records": []},
+    }
+    lineage_documents = {
+        "durable_lineage_packs": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "durable_lineage_id": "lineage-compare",
+                    "durable_entity_id": "entity-compare",
+                    "replay_key": "replay-compare",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "call-log",
+                    "migration_profile": "ringcentral-call-log",
+                },
+                {
+                    "source_key": "source-resume",
+                    "durable_lineage_id": "lineage-resume",
+                    "durable_entity_id": "entity-resume",
+                    "replay_key": "replay-resume",
+                    "source_system": "lacrm",
+                    "source_entity_type": "crm-contact",
+                    "migration_profile": "lacrm-contact",
+                },
+                {
+                    "source_key": "source-full",
+                    "durable_lineage_id": "lineage-full",
+                    "durable_entity_id": "entity-full",
+                    "replay_key": "replay-full",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "message-thread",
+                    "migration_profile": "ringcentral-message-thread",
+                },
+            ]
+        },
+        "durable_lineage_review_queue": {"records": []},
+    }
+    migration_documents = {
+        "migration_packs": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "migration_pack_id": "pack-compare",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "call-log",
+                    "migration_profile": "ringcentral-call-log",
+                    "readiness_state": "already-applied",
+                },
+                {
+                    "source_key": "source-resume",
+                    "migration_pack_id": "pack-resume",
+                    "source_system": "lacrm",
+                    "source_entity_type": "crm-contact",
+                    "migration_profile": "lacrm-contact",
+                    "readiness_state": "ready-for-apply",
+                },
+                {
+                    "source_key": "source-full",
+                    "migration_pack_id": "pack-full",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "message-thread",
+                    "migration_profile": "ringcentral-message-thread",
+                    "readiness_state": "ready-for-review",
+                },
+            ]
+        },
+        "migration_review_queue": {"records": []},
+    }
+
+    artifacts = build_source_replay_plan_artifacts(
+        readiness_documents=readiness_documents,
+        control_documents=control_documents,
+        lineage_documents=lineage_documents,
+        migration_documents=migration_documents,
+    )
+
+    assert artifacts["source_replay_plan_packs"]["record_count"] == 3
+    assert artifacts["source_replay_plan_review_queue"]["record_count"] == 0
+    assert artifacts["source_replay_plan_rollup"]["schema_version"] == SOURCE_REPLAY_PLAN_SCHEMA_VERSION
+
+    modes = {
+        record["source_key"]: record["replay_mode"]
+        for record in artifacts["source_replay_plan_packs"]["records"]
+    }
+    assert modes == {
+        "source-compare": "compare-only",
+        "source-resume": "resume-from-approved",
+        "source-full": "full-replay",
+    }
+
+
+def test_build_source_replay_plan_artifacts_from_m6c_outputs() -> None:
+    pipeline = build_source_control_pipeline_artifacts(sample_m6b_ingestion_records())
+    migration = build_ringcentral_lacrm_migration_artifacts(pipeline)
+    lineage = build_durable_lineage_artifacts(pipeline, migration)
+    controls = build_replay_safe_ingestion_control_artifacts(lineage, migration)
+    readiness = build_lineage_replay_readiness_artifacts(lineage, controls, migration)
+
+    artifacts = build_source_replay_plan_artifacts(
+        readiness_documents=readiness,
+        control_documents=controls,
+        lineage_documents=lineage,
+        migration_documents=migration,
+    )
+
+    assert artifacts["source_replay_plan_packs"]["record_count"] == 1
+    assert artifacts["source_replay_plan_review_queue"]["record_count"] == 1
+    assert artifacts["source_replay_plan_rollup"]["schema_version"] == SOURCE_REPLAY_PLAN_SCHEMA_VERSION
+    assert {record["replay_mode"] for record in artifacts["source_replay_plan_packs"]["records"]} == {
+        "compare-only"
+    }
+    review_reasons = artifacts["source_replay_plan_review_queue"]["records"][0]["reason_codes"]
+    assert "blocked_for_replay_planning" in review_reasons
+
+
