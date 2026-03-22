@@ -1,4 +1,4 @@
-name: live-provider-smoke
+﻿name: live-provider-smoke
 
 on:
   workflow_dispatch:
@@ -35,15 +35,12 @@ jobs:
       required_providers_json: ${{ steps.plan.outputs.required_providers_json }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install package and dev dependencies
         shell: bash
         run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
-
       - name: Build live smoke matrix plan
         id: plan
         shell: bash
@@ -56,15 +53,15 @@ jobs:
             --out-dir ./out
           cat ./out/live_smoke_matrix_plan.md >> "$GITHUB_STEP_SUMMARY"
           python - <<'PY'
-import json
-import os
-from pathlib import Path
+          import json
+          import os
+          from pathlib import Path
 
-payload = json.loads(Path("./out/live_smoke_matrix_plan.json").read_text(encoding="utf-8"))
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
-    handle.write(f"providers_json={json.dumps(payload['providers'])}\n")
-    handle.write(f"required_providers_json={json.dumps(payload['required_providers'])}\n")
-PY
+          payload = json.loads(Path("./out/live_smoke_matrix_plan.json").read_text(encoding="utf-8"))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"providers_json={json.dumps(payload['providers'])}\n")
+              handle.write(f"required_providers_json={json.dumps(payload['required_providers'])}\n")
+          PY
 
   smoke:
     needs: plan
@@ -76,15 +73,12 @@ PY
         provider: ${{ fromJson(needs.plan.outputs.providers_json) }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install package and dev dependencies
         shell: bash
         run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
-
       - name: Prepare provider token command
         shell: bash
         env:
@@ -95,41 +89,34 @@ PY
           set -euo pipefail
           mkdir -p ./out/logs
           case "${{ matrix.provider }}" in
-            gdrive)
-              TOKEN="${GDRIVE_ACCESS_TOKEN:-}"
-              ;;
-            dropbox)
-              TOKEN="${DROPBOX_ACCESS_TOKEN:-}"
-              ;;
-            graph)
-              TOKEN="${GRAPH_ACCESS_TOKEN:-}"
-              ;;
+            gdrive) TOKEN="${GDRIVE_ACCESS_TOKEN:-}" ;;
+            dropbox) TOKEN="${DROPBOX_ACCESS_TOKEN:-}" ;;
+            graph) TOKEN="${GRAPH_ACCESS_TOKEN:-}" ;;
             *)
               TOKEN=""
               echo "Unsupported provider: ${{ matrix.provider }}" > ./out/logs/preflight.stderr.log
               ;;
           esac
-
           if [ -n "$TOKEN" ]; then
             echo "::add-mask::$TOKEN"
           else
             echo "Missing token secret for provider ${{ matrix.provider }}" > ./out/logs/preflight.stderr.log
           fi
-
           TOKEN_COMMAND_PATH="$RUNNER_TEMP/live_smoke_token_command.py"
           cat > "$TOKEN_COMMAND_PATH" <<'PY'
-import json
-import os
+          import json
+          import os
 
-value = os.environ.get("LIVE_SMOKE_ACCESS_TOKEN", "").strip()
-if not value:
-    raise SystemExit("missing-live-smoke-access-token")
-print(json.dumps({
-    "access_token": value,
-    "source": "github-actions-secret",
-    "notes": ["workflow-live-smoke"],
-}))
-PY
+          value = os.environ.get("LIVE_SMOKE_ACCESS_TOKEN", "").strip()
+          if not value:
+              raise SystemExit("missing-live-smoke-access-token")
+
+          print(json.dumps({
+              "access_token": value,
+              "source": "github-actions-secret",
+              "notes": ["workflow-live-smoke"],
+          }))
+          PY
           chmod 700 "$TOKEN_COMMAND_PATH"
           {
             echo "LIVE_SMOKE_ACCESS_TOKEN=$TOKEN"
@@ -198,18 +185,20 @@ PY
         run: |
           set -euo pipefail
           python - <<'PY'
-import json
-from pathlib import Path
+          import json
+          from pathlib import Path
 
-summary = json.loads(Path("./out/live_smoke_summary.json").read_text(encoding="utf-8"))
-contract = json.loads(Path("./out/live_smoke_artifact_contract.json").read_text(encoding="utf-8"))
-print(f"Live smoke classification: {summary['classification']}")
-print(f"Artifact contract valid: {contract['valid']}")
-if not contract.get("valid"):
-    raise SystemExit(1)
-if not summary.get("success"):
-    raise SystemExit(1)
-PY
+          summary = json.loads(Path("./out/live_smoke_summary.json").read_text(encoding="utf-8"))
+          contract = json.loads(Path("./out/live_smoke_artifact_contract.json").read_text(encoding="utf-8"))
+
+          print(f"Live smoke classification: {summary['classification']}")
+          print(f"Artifact contract valid: {contract['valid']}")
+
+          if not contract.get("valid"):
+              raise SystemExit(1)
+          if not summary.get("success"):
+              raise SystemExit(1)
+          PY
 
   release-gate:
     needs:
@@ -219,15 +208,12 @@ PY
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install package and dev dependencies
         shell: bash
         run: python -m pip install --upgrade pip && python -m pip install -e .[dev]
-
       - name: Download smoke artifacts
         if: always()
         uses: actions/download-artifact@v4
@@ -235,7 +221,6 @@ PY
           path: ./artifacts
           pattern: live-smoke-*
           merge-multiple: false
-
       - name: Build matrix release gate summary
         id: gate
         if: always()
@@ -314,18 +299,20 @@ PY
         run: |
           set -euo pipefail
           python - <<'PY'
-import json
-from pathlib import Path
+          import json
+          from pathlib import Path
 
-matrix_summary = json.loads(Path("./out/live_smoke_matrix_summary.json").read_text(encoding="utf-8"))
-release_decision = json.loads(Path("./out/live_smoke_release_gate.json").read_text(encoding="utf-8"))
-mainline_readiness = json.loads(Path("./out/live_smoke_mainline_readiness.json").read_text(encoding="utf-8"))
-print(f"Matrix gate passed: {matrix_summary['gate_passed']}")
-print(f"Promotion decision: {release_decision['decision']}")
-print(f"Merge ready: {mainline_readiness['merge_ready']}")
-print(f"Mainline ready: {mainline_readiness['mainline_ready']}")
-if not mainline_readiness.get("merge_ready"):
-    raise SystemExit(1)
-if mainline_readiness.get("on_main_branch") and not mainline_readiness.get("mainline_ready"):
-    raise SystemExit(1)
-PY
+          matrix_summary = json.loads(Path("./out/live_smoke_matrix_summary.json").read_text(encoding="utf-8"))
+          release_decision = json.loads(Path("./out/live_smoke_release_gate.json").read_text(encoding="utf-8"))
+          mainline_readiness = json.loads(Path("./out/live_smoke_mainline_readiness.json").read_text(encoding="utf-8"))
+
+          print(f"Matrix gate passed: {matrix_summary['gate_passed']}")
+          print(f"Promotion decision: {release_decision['decision']}")
+          print(f"Merge ready: {mainline_readiness['merge_ready']}")
+          print(f"Mainline ready: {mainline_readiness['mainline_ready']}")
+
+          if not mainline_readiness.get("merge_ready"):
+              raise SystemExit(1)
+          if mainline_readiness.get("on_main_branch") and not mainline_readiness.get("mainline_ready"):
+              raise SystemExit(1)
+          PY
