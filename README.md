@@ -626,3 +626,15 @@ Block 1 starts M6B by migrating RingCentral and Less Annoying CRM records onto t
 ## Milestone 6C bundled pass
 
 The bundled M6C pass adds durable lineage packs, replay-safe ingestion controls, and lineage/replay readiness packs on top of the shared source-control pipeline and RingCentral/LACRM migration artifacts.
+
+## M6D Block 1
+
+Block 1 starts M6D by turning lineage/replay readiness into explicit source replay plan packs.
+
+### New script
+- `scripts/build_source_replay_plan_packs.py`
+
+### New artifacts
+- `source_replay_plan_packs.json`
+- `source_replay_plan_review_queue.json`
+- `source_replay_plan_rollup.json`
