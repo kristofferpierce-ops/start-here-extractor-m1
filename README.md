@@ -622,3 +622,7 @@ Block 1 starts M6B by migrating RingCentral and Less Annoying CRM records onto t
 - `ringcentral_lacrm_migration_packs.json`
 - `ringcentral_lacrm_migration_review_queue.json`
 - `ringcentral_lacrm_migration_rollup.json`
+
+## Milestone 6C bundled pass
+
+The bundled M6C pass adds durable lineage packs, replay-safe ingestion controls, and lineage/replay readiness packs on top of the shared source-control pipeline and RingCentral/LACRM migration artifacts.

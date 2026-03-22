@@ -1,10 +1,8 @@
 from __future__ import annotations
-
 import json
 import subprocess
 import sys
 from pathlib import Path
-
 from start_here_extractor.source_control_pipeline import (
     SOURCE_CONTROL_PIPELINE_SCHEMA_VERSION,
     build_source_control_pipeline_artifacts,
@@ -13,7 +11,12 @@ from start_here_extractor.ringcentral_lacrm_migration import (
     RINGCENTRAL_LACRM_MIGRATION_SCHEMA_VERSION,
     build_ringcentral_lacrm_migration_artifacts,
 )
-
+from start_here_extractor.durable_lineage_replay import (
+    DURABLE_LINEAGE_REPLAY_SCHEMA_VERSION,
+    build_durable_lineage_artifacts,
+    build_lineage_replay_readiness_artifacts,
+    build_replay_safe_ingestion_control_artifacts,
+)
 
 def sample_ingestion_records() -> list[dict]:
     return [
@@ -66,8 +69,6 @@ def sample_ingestion_records() -> list[dict]:
             "warnings": [],
         },
     ]
-
-
 def test_build_source_control_pipeline_artifacts_counts() -> None:
     artifacts = build_source_control_pipeline_artifacts(sample_ingestion_records())
     assert artifacts["source_records_raw"]["record_count"] == 2
@@ -77,8 +78,6 @@ def test_build_source_control_pipeline_artifacts_counts() -> None:
     assert artifacts["approved_deltas"]["record_count"] == 1
     assert artifacts["applied_state_transitions"]["record_count"] == 1
     assert artifacts["rollup"]["schema_version"] == SOURCE_CONTROL_PIPELINE_SCHEMA_VERSION
-
-
 def test_source_control_pipeline_script_writes_expected_artifacts(tmp_path: Path) -> None:
     ingestion_path = tmp_path / "ingestion-events.jsonl"
     with ingestion_path.open("w", encoding="utf-8") as handle:
@@ -103,9 +102,6 @@ def test_source_control_pipeline_script_writes_expected_artifacts(tmp_path: Path
     rollup = json.loads((out_dir / "source_control_pipeline_rollup.json").read_text(encoding="utf-8"))
     assert rollup["approved_delta_count"] == 1
     assert rollup["review_item_count"] == 1
-
-
-
 def sample_m6b_ingestion_records() -> list[dict]:
     return [
         {
@@ -179,8 +175,6 @@ def sample_m6b_ingestion_records() -> list[dict]:
             "warnings": [],
         },
     ]
-
-
 def test_build_ringcentral_lacrm_migration_artifacts_counts() -> None:
     pipeline = build_source_control_pipeline_artifacts(sample_m6b_ingestion_records())
     artifacts = build_ringcentral_lacrm_migration_artifacts(pipeline)
@@ -189,8 +183,6 @@ def test_build_ringcentral_lacrm_migration_artifacts_counts() -> None:
     assert artifacts["rollup"]["schema_version"] == RINGCENTRAL_LACRM_MIGRATION_SCHEMA_VERSION
     assert artifacts["rollup"]["source_system_counts"]["ringcentral"] == 1
     assert artifacts["rollup"]["source_system_counts"]["lacrm"] == 1
-
-
 def test_ringcentral_lacrm_migration_script_writes_expected_artifacts(tmp_path: Path) -> None:
     ingestion_path = tmp_path / "ingestion-events.jsonl"
     with ingestion_path.open("w", encoding="utf-8") as handle:
@@ -212,7 +204,6 @@ def test_ringcentral_lacrm_migration_script_writes_expected_artifacts(tmp_path: 
         check=False,
     )
     assert pipeline_proc.returncode == 0, pipeline_proc.stderr
-
     out_dir = tmp_path / "m6b"
     proc = subprocess.run(
         [
@@ -235,3 +226,128 @@ def test_ringcentral_lacrm_migration_script_writes_expected_artifacts(tmp_path: 
     assert packs["record_count"] == 2
     readiness_states = {record["readiness_state"] for record in packs["records"]}
     assert readiness_states == {"blocked-review", "already-applied"}
+def test_build_durable_lineage_artifacts_counts() -> None:
+    pipeline = build_source_control_pipeline_artifacts(sample_m6b_ingestion_records())
+    migration = build_ringcentral_lacrm_migration_artifacts(pipeline)
+    artifacts = build_durable_lineage_artifacts(pipeline, migration)
+    assert artifacts["durable_lineage_packs"]["record_count"] == 2
+    assert artifacts["durable_lineage_review_queue"]["record_count"] == 0
+    assert artifacts["durable_lineage_rollup"]["schema_version"] == DURABLE_LINEAGE_REPLAY_SCHEMA_VERSION
+def test_build_replay_safe_ingestion_control_artifacts_counts() -> None:
+    pipeline = build_source_control_pipeline_artifacts(sample_m6b_ingestion_records())
+    migration = build_ringcentral_lacrm_migration_artifacts(pipeline)
+    lineage = build_durable_lineage_artifacts(pipeline, migration)
+    artifacts = build_replay_safe_ingestion_control_artifacts(lineage, migration)
+    assert artifacts["replay_safe_ingestion_controls"]["record_count"] == 2
+    assert artifacts["replay_safe_ingestion_review_queue"]["record_count"] == 0
+    assert artifacts["replay_safe_ingestion_rollup"]["schema_version"] == DURABLE_LINEAGE_REPLAY_SCHEMA_VERSION
+def test_build_lineage_replay_readiness_artifacts_counts() -> None:
+    pipeline = build_source_control_pipeline_artifacts(sample_m6b_ingestion_records())
+    migration = build_ringcentral_lacrm_migration_artifacts(pipeline)
+    lineage = build_durable_lineage_artifacts(pipeline, migration)
+    controls = build_replay_safe_ingestion_control_artifacts(lineage, migration)
+    artifacts = build_lineage_replay_readiness_artifacts(lineage, controls, migration)
+    assert artifacts["lineage_replay_readiness_packs"]["record_count"] == 2
+    assert artifacts["lineage_replay_readiness_review_queue"]["record_count"] == 0
+    assert artifacts["lineage_replay_readiness_rollup"]["schema_version"] == DURABLE_LINEAGE_REPLAY_SCHEMA_VERSION
+    states = {record["readiness_state"] for record in artifacts["lineage_replay_readiness_packs"]["records"]}
+    assert states == {"blocked-review", "protected-ready"}
+def test_durable_lineage_bundle_scripts_write_expected_artifacts(tmp_path: Path) -> None:
+    ingestion_path = tmp_path / "ingestion-events.jsonl"
+    with ingestion_path.open("w", encoding="utf-8") as handle:
+        for record in sample_m6b_ingestion_records():
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    pipeline_dir = tmp_path / "pipeline"
+    migration_dir = tmp_path / "migration"
+    lineage_dir = tmp_path / "lineage"
+    control_dir = tmp_path / "controls"
+    readiness_dir = tmp_path / "readiness"
+    pipeline_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_source_control_pipeline.py",
+            "--ingestion-path",
+            str(ingestion_path),
+            "--out-dir",
+            str(pipeline_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert pipeline_proc.returncode == 0, pipeline_proc.stderr
+    migration_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_ringcentral_lacrm_migration_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--out-dir",
+            str(migration_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert migration_proc.returncode == 0, migration_proc.stderr
+    lineage_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_durable_lineage_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--out-dir",
+            str(lineage_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert lineage_proc.returncode == 0, lineage_proc.stderr
+    control_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_replay_safe_ingestion_controls.py",
+            "--lineage-dir",
+            str(lineage_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--out-dir",
+            str(control_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert control_proc.returncode == 0, control_proc.stderr
+    readiness_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_lineage_replay_readiness_packs.py",
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--out-dir",
+            str(readiness_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert readiness_proc.returncode == 0, readiness_proc.stderr
+    rollup = json.loads((readiness_dir / "lineage_replay_readiness_rollup.json").read_text(encoding="utf-8"))
+    lineage_doc = json.loads((lineage_dir / "durable_lineage_packs.json").read_text(encoding="utf-8"))
+    control_doc = json.loads((control_dir / "replay_safe_ingestion_controls.json").read_text(encoding="utf-8"))
+    assert lineage_doc["record_count"] == 2
+    assert control_doc["record_count"] == 2
+    assert rollup["readiness_pack_count"] == 2
