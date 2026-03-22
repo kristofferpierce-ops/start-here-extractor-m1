@@ -692,3 +692,19 @@ Outputs:
 - `source_replay_approval_rollup.json`
 
 This block keeps replay approval journal-first and non-destructive, auto-approving only stable compare-only and resume-from-approved paths while sending full replay and upstream review dependencies into an explicit approval queue.
+
+## M6D Block 4
+
+Block 4 turns replay approval journals into replay execution packs and a dedicated execution review queue.
+
+Added in this block:
+- `src/start_here_extractor/source_replay_execution.py`
+- `scripts/build_source_replay_execution_packs.py`
+- targeted `tests/test_milestone6.py` coverage
+
+Outputs:
+- `source_replay_execution_packs.json`
+- `source_replay_execution_review_queue.json`
+- `source_replay_execution_rollup.json`
+
+This block stays compare-first and non-destructive, packaging only approved replay actions into execution-ready dry-run packs while carrying unresolved approval items forward into an explicit execution review queue.
