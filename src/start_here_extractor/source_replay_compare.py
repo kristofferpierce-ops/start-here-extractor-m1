@@ -48,6 +48,23 @@ def load_plan_documents(plan_dir: str | Path) -> dict[str, dict]:
     return payloads
 
 
+
+def load_compare_documents(compare_dir: str | Path) -> dict[str, dict]:
+    path = Path(compare_dir)
+    names = {
+        "source_replay_compare_packs": "source_replay_compare_packs.json",
+        "source_replay_compare_review_queue": "source_replay_compare_review_queue.json",
+        "source_replay_compare_rollup": "source_replay_compare_rollup.json",
+    }
+    payloads: dict[str, dict] = {}
+    for key, filename in names.items():
+        file_path = path / filename
+        if file_path.exists():
+            payloads[key] = json.loads(file_path.read_text(encoding="utf-8"))
+        else:
+            payloads[key] = {"records": []}
+    return payloads
+
 def _review_priority(reason_codes: list[str]) -> str:
     urgent = {
         "missing_source_key",

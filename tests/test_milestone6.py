@@ -25,6 +25,10 @@ from start_here_extractor.source_replay_compare import (
     SOURCE_REPLAY_COMPARE_SCHEMA_VERSION,
     build_source_replay_compare_artifacts,
 )
+from start_here_extractor.source_replay_approval import (
+    SOURCE_REPLAY_APPROVAL_SCHEMA_VERSION,
+    build_source_replay_approval_artifacts,
+)
 
 def sample_ingestion_records() -> list[dict]:
     return [
@@ -900,3 +904,224 @@ def test_source_replay_compare_script_writes_expected_artifacts(tmp_path: Path) 
     assert rollup["comparison_outcome_counts"]["resume-required"] == 1
     assert rollup["comparison_outcome_counts"]["full-replay-required"] == 1
     assert packs_doc["record_count"] == 3
+
+def build_m6d_block3_documents() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+    pipeline, migration, lineage, controls, readiness, plans = build_m6d_block2_documents()
+    compare = build_source_replay_compare_artifacts(
+        pipeline,
+        migration,
+        lineage,
+        controls,
+        readiness,
+        plans,
+    )
+    return pipeline, migration, lineage, controls, readiness, plans, compare
+
+
+def test_build_source_replay_approval_artifacts_counts() -> None:
+    pipeline, migration, lineage, controls, readiness, plans, compare = build_m6d_block3_documents()
+    artifacts = build_source_replay_approval_artifacts(
+        pipeline,
+        migration,
+        lineage,
+        controls,
+        readiness,
+        plans,
+        compare,
+    )
+    assert artifacts["source_replay_approval_journal"]["record_count"] == 2
+    assert artifacts["source_replay_approval_queue"]["record_count"] == 2
+    assert artifacts["source_replay_approval_rollup"]["schema_version"] == SOURCE_REPLAY_APPROVAL_SCHEMA_VERSION
+    decisions = {record["approval_decision"] for record in artifacts["source_replay_approval_journal"]["records"]}
+    assert decisions == {"approved-no-op-compare", "approved-resume-replay"}
+
+
+def test_build_source_replay_approval_artifacts_requires_manual_full_replay() -> None:
+    compare_documents = {
+        "source_replay_compare_packs": {
+            "records": [
+                {
+                    "source_replay_compare_id": "compare-full",
+                    "source_replay_plan_id": "plan-full",
+                    "source_key": "source-full",
+                    "source_system": "lacrm",
+                    "source_entity_type": "contact",
+                    "migration_profile": "lacrm-contact",
+                    "replay_mode": "full-replay",
+                    "comparison_outcome": "full-replay-required",
+                    "comparison_requires_review": False,
+                    "expected_state_snapshot": {
+                        "compare_first": True,
+                        "downstream_write_allowed": False,
+                        "write_constraint": "no-downstream-writes",
+                        "resume_from_stage": "raw",
+                        "planned_actions": ["rebuild", "recompare"],
+                    },
+                    "provenance_refs": {},
+                }
+            ]
+        },
+        "source_replay_compare_review_queue": {"records": []},
+    }
+    plan_documents = {
+        "source_replay_plan_packs": {
+            "records": [
+                {
+                    "source_replay_plan_id": "plan-full",
+                    "source_key": "source-full",
+                    "replay_key": "replay-full",
+                    "idempotency_key": "idem-full",
+                }
+            ]
+        },
+        "source_replay_plan_review_queue": {"records": []},
+    }
+    readiness_documents = {
+        "lineage_replay_readiness_packs": {"records": [{"source_key": "source-full"}]},
+        "lineage_replay_readiness_review_queue": {"records": []},
+    }
+    control_documents = {
+        "replay_safe_ingestion_controls": {"records": [{"source_key": "source-full"}]},
+        "replay_safe_ingestion_review_queue": {"records": []},
+    }
+    lineage_documents = {
+        "durable_lineage_packs": {
+            "records": [
+                {
+                    "source_key": "source-full",
+                    "source_system": "lacrm",
+                    "source_entity_type": "contact",
+                    "migration_profile": "lacrm-contact",
+                }
+            ]
+        },
+        "durable_lineage_review_queue": {"records": []},
+    }
+    migration_documents = {
+        "migration_packs": {
+            "records": [
+                {
+                    "source_key": "source-full",
+                    "source_system": "lacrm",
+                    "source_entity_type": "contact",
+                    "migration_profile": "lacrm-contact",
+                }
+            ]
+        },
+        "migration_review_queue": {"records": []},
+    }
+
+    artifacts = build_source_replay_approval_artifacts(
+        compare_documents=compare_documents,
+        plan_documents=plan_documents,
+        readiness_documents=readiness_documents,
+        control_documents=control_documents,
+        lineage_documents=lineage_documents,
+        migration_documents=migration_documents,
+    )
+    assert artifacts["source_replay_approval_journal"]["record_count"] == 0
+    assert artifacts["source_replay_approval_queue"]["record_count"] == 1
+    assert "manual_full_replay_approval_required" in artifacts["source_replay_approval_queue"]["records"][0]["reason_codes"]
+
+
+def test_source_replay_approval_script_writes_expected_artifacts(tmp_path: Path) -> None:
+    ingestion_path = tmp_path / "ingestion-events.jsonl"
+    with ingestion_path.open("w", encoding="utf-8") as handle:
+        for record in sample_m6d_ingestion_records():
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    pipeline_dir = tmp_path / "pipeline"
+    migration_dir = tmp_path / "migration"
+    lineage_dir = tmp_path / "lineage"
+    control_dir = tmp_path / "controls"
+    readiness_dir = tmp_path / "readiness"
+    replay_plan_dir = tmp_path / "replay-plan"
+    replay_compare_dir = tmp_path / "replay-compare"
+    replay_approval_dir = tmp_path / "replay-approval"
+
+    commands = [
+        [sys.executable, "scripts/build_source_control_pipeline.py", "--ingestion-path", str(ingestion_path), "--out-dir", str(pipeline_dir)],
+        [sys.executable, "scripts/build_ringcentral_lacrm_migration_packs.py", "--pipeline-dir", str(pipeline_dir), "--out-dir", str(migration_dir)],
+        [sys.executable, "scripts/build_durable_lineage_packs.py", "--pipeline-dir", str(pipeline_dir), "--migration-dir", str(migration_dir), "--out-dir", str(lineage_dir)],
+        [sys.executable, "scripts/build_replay_safe_ingestion_controls.py", "--lineage-dir", str(lineage_dir), "--migration-dir", str(migration_dir), "--out-dir", str(control_dir)],
+        [sys.executable, "scripts/build_lineage_replay_readiness_packs.py", "--lineage-dir", str(lineage_dir), "--control-dir", str(control_dir), "--migration-dir", str(migration_dir), "--out-dir", str(readiness_dir)],
+        [
+            sys.executable,
+            "scripts/build_source_replay_plan_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_plan_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_source_replay_compare_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_compare_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_source_replay_approval_journals.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--compare-dir",
+            str(replay_compare_dir),
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_approval_dir),
+        ],
+    ]
+
+    for command in commands:
+        proc = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+    rollup = json.loads((replay_approval_dir / "source_replay_approval_rollup.json").read_text(encoding="utf-8"))
+    queue_doc = json.loads((replay_approval_dir / "source_replay_approval_queue.json").read_text(encoding="utf-8"))
+    journal_lines = [
+        json.loads(line)
+        for line in (replay_approval_dir / "source_replay_approval_journal.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert rollup["approval_journal_count"] == 2
+    assert rollup["review_item_count"] == 2
+    assert rollup["approval_decision_counts"]["approved-no-op-compare"] == 1
+    assert rollup["approval_decision_counts"]["approved-resume-replay"] == 1
+    assert queue_doc["record_count"] == 2
+    assert len(journal_lines) == 2

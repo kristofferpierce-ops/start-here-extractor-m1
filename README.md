@@ -676,3 +676,19 @@ Outputs:
 - `source_replay_compare_rollup.json`
 
 This block keeps replay compare-first and offline-derived only, while surfacing upstream replay-plan review items and upstream state drift in a dedicated comparison review queue.
+
+## M6D Block 3
+
+Block 3 turns source replay comparison packs into replay approval journals and a dedicated approval review queue.
+
+Added in this block:
+- `src/start_here_extractor/source_replay_approval.py`
+- `scripts/build_source_replay_approval_journals.py`
+- targeted `tests/test_milestone6.py` coverage
+
+Outputs:
+- `source_replay_approval_queue.json`
+- `source_replay_approval_journal.jsonl`
+- `source_replay_approval_rollup.json`
+
+This block keeps replay approval journal-first and non-destructive, auto-approving only stable compare-only and resume-from-approved paths while sending full replay and upstream review dependencies into an explicit approval queue.
