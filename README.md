@@ -609,3 +609,16 @@ Block 1 starts Milestone 6 by materializing a generalized source-control pipelin
 - `approved_deltas.json`
 - `applied_state_transitions.json`
 - `source_control_pipeline_rollup.json`
+
+
+## M6B Block 1
+
+Block 1 starts M6B by migrating RingCentral and Less Annoying CRM records onto the shared source-control pipeline.
+
+### New script
+- `scripts/build_ringcentral_lacrm_migration_packs.py`
+
+### New artifacts
+- `ringcentral_lacrm_migration_packs.json`
+- `ringcentral_lacrm_migration_review_queue.json`
+- `ringcentral_lacrm_migration_rollup.json`

@@ -9,6 +9,10 @@ from start_here_extractor.source_control_pipeline import (
     SOURCE_CONTROL_PIPELINE_SCHEMA_VERSION,
     build_source_control_pipeline_artifacts,
 )
+from start_here_extractor.ringcentral_lacrm_migration import (
+    RINGCENTRAL_LACRM_MIGRATION_SCHEMA_VERSION,
+    build_ringcentral_lacrm_migration_artifacts,
+)
 
 
 def sample_ingestion_records() -> list[dict]:
@@ -99,3 +103,135 @@ def test_source_control_pipeline_script_writes_expected_artifacts(tmp_path: Path
     rollup = json.loads((out_dir / "source_control_pipeline_rollup.json").read_text(encoding="utf-8"))
     assert rollup["approved_delta_count"] == 1
     assert rollup["review_item_count"] == 1
+
+
+
+def sample_m6b_ingestion_records() -> list[dict]:
+    return [
+        {
+            "event_id": "rc-001",
+            "emitted_at": "2026-03-21T02:00:00+00:00",
+            "source": {
+                "source_type": "ringcentral",
+                "source_system": "ringcentral",
+                "source_entity_type": "call-log",
+                "source_record_id": "call-001",
+                "content_family": "communication-event",
+            },
+            "pipeline": {
+                "raw": {"status": "captured", "captured_at": "2026-03-21T02:00:00+00:00", "ref": "ingestion://rc-001"},
+                "normalized": {"status": "normalized", "normalized_at": "2026-03-21T02:01:00+00:00", "ref": "inventory://rc-001"},
+                "matched": {"status": "pending"},
+                "approved": {"status": "pending"},
+                "applied": {"status": "pending"},
+            },
+            "relationship_memory": {
+                "candidates": [
+                    {"entity_type": "contact", "entity_id": "contact-rc-1", "confidence": 0.74, "reason": "same caller id"}
+                ]
+            },
+            "governance": {"review_required": True},
+            "evidence": {"zip_sha256": "ringcentralsha", "start_here": "Call transcript"},
+            "warnings": [],
+        },
+        {
+            "event_id": "lacrm-001",
+            "emitted_at": "2026-03-21T03:00:00+00:00",
+            "source": {
+                "source_type": "lacrm",
+                "source_system": "lacrm",
+                "source_entity_type": "crm-contact",
+                "source_record_id": "contact-123",
+                "content_family": "operating-core-event",
+            },
+            "pipeline": {
+                "raw": {"status": "captured", "captured_at": "2026-03-21T03:00:00+00:00", "ref": "ingestion://lacrm-001"},
+                "normalized": {"status": "normalized", "normalized_at": "2026-03-21T03:01:00+00:00", "ref": "inventory://lacrm-001"},
+                "matched": {"status": "matched", "entity_type": "contact", "entity_id": "contact-123"},
+                "approved": {"status": "approved", "approved_at": "2026-03-21T03:05:00+00:00", "approved_by": "operator-2", "reason": "crm validated"},
+                "applied": {"status": "applied", "applied_at": "2026-03-21T03:10:00+00:00", "applied_ref": "lacrm://contact/contact-123", "target_type": "crm-contact", "target_id": "contact-123"},
+            },
+            "relationship_memory": {"candidates": []},
+            "governance": {"review_required": False},
+            "evidence": {"zip_sha256": "lacrmsha", "start_here": "CRM contact export"},
+            "warnings": [],
+        },
+        {
+            "event_id": "gdrive-003",
+            "emitted_at": "2026-03-21T04:00:00+00:00",
+            "source": {
+                "source_type": "gdrive",
+                "source_system": "gdrive",
+                "source_entity_type": "evidence-artifact",
+                "source_record_id": "file-003",
+                "content_family": "start-here-evidence",
+            },
+            "pipeline": {
+                "raw": {"status": "captured", "captured_at": "2026-03-21T04:00:00+00:00", "ref": "ingestion://gdrive-003"},
+                "normalized": {"status": "normalized", "normalized_at": "2026-03-21T04:01:00+00:00", "ref": "inventory://gdrive-003"},
+                "matched": {"status": "pending"},
+                "approved": {"status": "pending"},
+                "applied": {"status": "pending"},
+            },
+            "relationship_memory": {"candidates": []},
+            "governance": {"review_required": False},
+            "evidence": {"zip_sha256": "other", "start_here": "Other"},
+            "warnings": [],
+        },
+    ]
+
+
+def test_build_ringcentral_lacrm_migration_artifacts_counts() -> None:
+    pipeline = build_source_control_pipeline_artifacts(sample_m6b_ingestion_records())
+    artifacts = build_ringcentral_lacrm_migration_artifacts(pipeline)
+    assert artifacts["migration_packs"]["record_count"] == 2
+    assert artifacts["migration_review_queue"]["record_count"] == 0
+    assert artifacts["rollup"]["schema_version"] == RINGCENTRAL_LACRM_MIGRATION_SCHEMA_VERSION
+    assert artifacts["rollup"]["source_system_counts"]["ringcentral"] == 1
+    assert artifacts["rollup"]["source_system_counts"]["lacrm"] == 1
+
+
+def test_ringcentral_lacrm_migration_script_writes_expected_artifacts(tmp_path: Path) -> None:
+    ingestion_path = tmp_path / "ingestion-events.jsonl"
+    with ingestion_path.open("w", encoding="utf-8") as handle:
+        for record in sample_m6b_ingestion_records():
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+    pipeline_dir = tmp_path / "pipeline"
+    pipeline_proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_source_control_pipeline.py",
+            "--ingestion-path",
+            str(ingestion_path),
+            "--out-dir",
+            str(pipeline_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert pipeline_proc.returncode == 0, pipeline_proc.stderr
+
+    out_dir = tmp_path / "m6b"
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "scripts/build_ringcentral_lacrm_migration_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--out-dir",
+            str(out_dir),
+        ],
+        cwd=Path(__file__).resolve().parents[1],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    rollup = json.loads((out_dir / "ringcentral_lacrm_migration_rollup.json").read_text(encoding="utf-8"))
+    packs = json.loads((out_dir / "ringcentral_lacrm_migration_packs.json").read_text(encoding="utf-8"))
+    assert rollup["migration_pack_count"] == 2
+    assert packs["record_count"] == 2
+    readiness_states = {record["readiness_state"] for record in packs["records"]}
+    assert readiness_states == {"blocked-review", "already-applied"}
