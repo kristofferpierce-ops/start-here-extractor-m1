@@ -660,3 +660,19 @@ Replay modes:
 
 Blocked sources are surfaced in the review queue instead of being silently planned.
 
+
+## M6D Block 2
+
+Block 2 turns source replay plans into explicit source replay comparison packs.
+
+Added in this block:
+- `src/start_here_extractor/source_replay_compare.py`
+- `scripts/build_source_replay_compare_packs.py`
+- targeted `tests/test_milestone6.py` coverage
+
+Outputs:
+- `source_replay_compare_packs.json`
+- `source_replay_compare_review_queue.json`
+- `source_replay_compare_rollup.json`
+
+This block keeps replay compare-first and offline-derived only, while surfacing upstream replay-plan review items and upstream state drift in a dedicated comparison review queue.

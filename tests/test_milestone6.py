@@ -21,6 +21,10 @@ from start_here_extractor.source_replay_plans import (
     SOURCE_REPLAY_PLAN_SCHEMA_VERSION,
     build_source_replay_plan_artifacts,
 )
+from start_here_extractor.source_replay_compare import (
+    SOURCE_REPLAY_COMPARE_SCHEMA_VERSION,
+    build_source_replay_compare_artifacts,
+)
 
 def sample_ingestion_records() -> list[dict]:
     return [
@@ -708,3 +712,191 @@ def test_build_source_replay_plan_artifacts_from_m6c_outputs() -> None:
     assert "blocked_for_replay_planning" in review_reasons
 
 
+
+def build_m6d_block2_documents() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+    pipeline, migration, lineage, controls, readiness = build_m6d_documents()
+    plans = build_source_replay_plan_artifacts(pipeline, migration, lineage, controls, readiness)
+    return pipeline, migration, lineage, controls, readiness, plans
+
+
+def test_build_source_replay_compare_artifacts_counts() -> None:
+    pipeline, migration, lineage, controls, readiness, plans = build_m6d_block2_documents()
+    artifacts = build_source_replay_compare_artifacts(
+        pipeline,
+        migration,
+        lineage,
+        controls,
+        readiness,
+        plans,
+    )
+    assert artifacts["source_replay_compare_packs"]["record_count"] == 3
+    assert artifacts["source_replay_compare_review_queue"]["record_count"] == 1
+    assert artifacts["source_replay_compare_rollup"]["schema_version"] == SOURCE_REPLAY_COMPARE_SCHEMA_VERSION
+    outcomes = {record["comparison_outcome"] for record in artifacts["source_replay_compare_packs"]["records"]}
+    assert outcomes == {"stable-match", "resume-required", "full-replay-required"}
+
+
+def test_build_source_replay_compare_artifacts_flags_state_drift() -> None:
+    plan_documents = {
+        "source_replay_plan_packs": {
+            "records": [
+                {
+                    "source_replay_plan_id": "plan-compare",
+                    "source_key": "source-compare",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "call-log",
+                    "migration_profile": "ringcentral-call-log",
+                    "readiness_state": "protected-ready",
+                    "replay_state": "replay-protected",
+                    "migration_state": "already-applied",
+                    "replay_mode": "compare-only",
+                    "resume_from_stage": "applied",
+                    "planned_actions": ["replay-compare"],
+                    "compare_first": True,
+                    "downstream_write_allowed": False,
+                    "write_constraint": "no-downstream-writes",
+                }
+            ]
+        },
+        "source_replay_plan_review_queue": {"records": []},
+    }
+    readiness_documents = {
+        "lineage_replay_readiness_packs": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "readiness_state": "ready-for-replay",
+                }
+            ]
+        },
+        "lineage_replay_readiness_review_queue": {"records": []},
+    }
+    control_documents = {
+        "replay_safe_ingestion_controls": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "replay_state": "replay-safe",
+                }
+            ]
+        },
+        "replay_safe_ingestion_review_queue": {"records": []},
+    }
+    lineage_documents = {
+        "durable_lineage_packs": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "call-log",
+                    "migration_profile": "ringcentral-call-log",
+                }
+            ]
+        },
+        "durable_lineage_review_queue": {"records": []},
+    }
+    migration_documents = {
+        "migration_packs": {
+            "records": [
+                {
+                    "source_key": "source-compare",
+                    "source_system": "ringcentral",
+                    "source_entity_type": "call-log",
+                    "migration_profile": "ringcentral-call-log",
+                    "readiness_state": "ready-for-review",
+                }
+            ]
+        },
+        "migration_review_queue": {"records": []},
+    }
+
+    artifacts = build_source_replay_compare_artifacts(
+        plan_documents=plan_documents,
+        readiness_documents=readiness_documents,
+        control_documents=control_documents,
+        lineage_documents=lineage_documents,
+        migration_documents=migration_documents,
+    )
+    assert artifacts["source_replay_compare_packs"]["record_count"] == 1
+    pack = artifacts["source_replay_compare_packs"]["records"][0]
+    assert pack["comparison_outcome"] == "upstream-state-drift"
+    assert pack["comparison_requires_review"] is True
+    assert artifacts["source_replay_compare_review_queue"]["record_count"] == 1
+    assert "comparison_requires_review" in artifacts["source_replay_compare_review_queue"]["records"][0]["reason_codes"]
+
+
+def test_source_replay_compare_script_writes_expected_artifacts(tmp_path: Path) -> None:
+    ingestion_path = tmp_path / "ingestion-events.jsonl"
+    with ingestion_path.open("w", encoding="utf-8") as handle:
+        for record in sample_m6d_ingestion_records():
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    pipeline_dir = tmp_path / "pipeline"
+    migration_dir = tmp_path / "migration"
+    lineage_dir = tmp_path / "lineage"
+    control_dir = tmp_path / "controls"
+    readiness_dir = tmp_path / "readiness"
+    replay_plan_dir = tmp_path / "replay-plan"
+    replay_compare_dir = tmp_path / "replay-compare"
+
+    commands = [
+        [sys.executable, "scripts/build_source_control_pipeline.py", "--ingestion-path", str(ingestion_path), "--out-dir", str(pipeline_dir)],
+        [sys.executable, "scripts/build_ringcentral_lacrm_migration_packs.py", "--pipeline-dir", str(pipeline_dir), "--out-dir", str(migration_dir)],
+        [sys.executable, "scripts/build_durable_lineage_packs.py", "--pipeline-dir", str(pipeline_dir), "--migration-dir", str(migration_dir), "--out-dir", str(lineage_dir)],
+        [sys.executable, "scripts/build_replay_safe_ingestion_controls.py", "--lineage-dir", str(lineage_dir), "--migration-dir", str(migration_dir), "--out-dir", str(control_dir)],
+        [sys.executable, "scripts/build_lineage_replay_readiness_packs.py", "--lineage-dir", str(lineage_dir), "--control-dir", str(control_dir), "--migration-dir", str(migration_dir), "--out-dir", str(readiness_dir)],
+        [
+            sys.executable,
+            "scripts/build_source_replay_plan_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_plan_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_source_replay_compare_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_compare_dir),
+        ],
+    ]
+
+    for command in commands:
+        proc = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+    rollup = json.loads((replay_compare_dir / "source_replay_compare_rollup.json").read_text(encoding="utf-8"))
+    packs_doc = json.loads((replay_compare_dir / "source_replay_compare_packs.json").read_text(encoding="utf-8"))
+
+    assert rollup["comparison_pack_count"] == 3
+    assert rollup["review_item_count"] == 1
+    assert rollup["comparison_outcome_counts"]["stable-match"] == 1
+    assert rollup["comparison_outcome_counts"]["resume-required"] == 1
+    assert rollup["comparison_outcome_counts"]["full-replay-required"] == 1
+    assert packs_doc["record_count"] == 3
