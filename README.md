@@ -1,4 +1,4 @@
-# Milestone 3E Closeout Block - `start_here_extractor`
+﻿# start_here_extractor
 
 This package extends the Milestone 3D extractor with **release hardening and CI closeout work**:
 
@@ -98,7 +98,7 @@ python -m start_here_extractor.cli --cloud-provider gdrive --cloud-access-token 
 
 ### Example GitHub live smoke run
 
-Use **Actions → live-provider-smoke → Run workflow** and choose:
+Use **Actions â†’ live-provider-smoke â†’ Run workflow** and choose:
 
 - `gdrive`
 - `dropbox`
@@ -153,9 +153,9 @@ Useful provider-specific flags:
 
 Milestone 3D and 3E preserve the current scan/policy behavior:
 
-- malicious AV or YARA match → `reject`
-- scan engine execution failure → `warn` / `inconclusive`
-- suspicious ZIP structure → `sandbox`
+- malicious AV or YARA match â†’ `reject`
+- scan engine execution failure â†’ `warn` / `inconclusive`
+- suspicious ZIP structure â†’ `sandbox`
 - Windows Sandbox support in CI is **dry-run artifact generation only**
 
 ## Inventory output
@@ -638,3 +638,25 @@ Block 1 starts M6D by turning lineage/replay readiness into explicit source repl
 - `source_replay_plan_packs.json`
 - `source_replay_plan_review_queue.json`
 - `source_replay_plan_rollup.json`
+
+## M6D Block 1
+
+This block turns lineage and replay readiness into explicit source replay plan packs.
+
+Added in this block:
+- `src/start_here_extractor/source_replay_plans.py`
+- `scripts/build_source_replay_plan_packs.py`
+- targeted `tests/test_milestone6.py` coverage
+
+Outputs:
+- `source_replay_plan_packs.json`
+- `source_replay_plan_review_queue.json`
+- `source_replay_plan_rollup.json`
+
+Replay modes:
+- `compare-only`
+- `resume-from-approved`
+- `full-replay`
+
+Blocked sources are surfaced in the review queue instead of being silently planned.
+
