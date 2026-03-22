@@ -708,3 +708,31 @@ Outputs:
 - `source_replay_execution_rollup.json`
 
 This block stays compare-first and non-destructive, packaging only approved replay actions into execution-ready dry-run packs while carrying unresolved approval items forward into an explicit execution review queue.
+
+## M6E Block 1
+
+This block adds the first local-launchable operator console alpha for replay operations.
+
+Added in this block:
+- `src/start_here_extractor/operator_console_alpha.py`
+- `scripts/build_operator_console_alpha.py`
+- `scripts/serve_operator_console_alpha.py`
+- targeted `tests/test_milestone6.py` coverage
+
+Outputs:
+- `operator_console_alpha_model.json`
+- `operator_console_alpha_rollup.json`
+- `operator_console_alpha.html`
+
+Purpose:
+- surface replay plan, compare, approval, and execution state in one place
+- provide a local internal testing UI before any live-write behavior
+- preserve compare-first and non-destructive operator review posture
+
+Example build:
+
+    python scripts/build_operator_console_alpha.py --plan-dir out/replay-plan --compare-dir out/replay-compare --approval-dir out/replay-approval --execution-dir out/replay-execution --out-dir out/operator-console-alpha
+
+Example local launch:
+
+    python scripts/serve_operator_console_alpha.py --console-dir out/operator-console-alpha

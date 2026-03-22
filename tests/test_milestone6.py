@@ -33,6 +33,9 @@ from start_here_extractor.source_replay_execution import (
     SOURCE_REPLAY_EXECUTION_SCHEMA_VERSION,
     build_source_replay_execution_artifacts,
 )
+from start_here_extractor.operator_console_alpha import (
+    build_operator_console_alpha_artifacts,
+)
 
 def sample_ingestion_records() -> list[dict]:
     return [
@@ -1392,3 +1395,170 @@ def test_source_replay_execution_script_writes_expected_artifacts(tmp_path: Path
     assert rollup["execution_status_counts"]["not-required"] == 1
     assert rollup["execution_status_counts"]["ready-for-dry-run"] == 1
     assert packs_doc["record_count"] == 2
+
+def build_m6e_block1_documents() -> tuple[dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict], dict[str, dict]]:
+    pipeline, migration, lineage, controls, readiness, plans, compare, approval = build_m6d_block4_documents()
+    execution = build_source_replay_execution_artifacts(
+        pipeline,
+        migration,
+        lineage,
+        controls,
+        readiness,
+        plans,
+        compare,
+        approval,
+    )
+    console = build_operator_console_alpha_artifacts(plans, compare, approval, execution)
+    return plans, compare, approval, execution, console
+
+
+def test_build_operator_console_alpha_artifacts_counts() -> None:
+    plans, compare, approval, execution, console = build_m6e_block1_documents()
+    assert console["operator_console_alpha_model"]["summary"]["plan_count"] == 3
+    assert console["operator_console_alpha_model"]["summary"]["execution_pack_count"] == 2
+    assert console["operator_console_alpha_rollup"]["source_count"] == 4
+    assert console["operator_console_alpha_rollup"]["current_stage_counts"]["completed-no-op"] == 1
+    assert console["operator_console_alpha_rollup"]["current_stage_counts"]["execution-ready"] == 1
+    assert console["operator_console_alpha_rollup"]["current_stage_counts"]["execution-review"] == 2
+
+
+def test_operator_console_alpha_html_contains_stage_and_source_key() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    html_doc = console["operator_console_alpha_html"]["html"]
+    assert "Source Replay Operator Console Alpha" in html_doc
+    assert "execution-ready" in html_doc
+    assert "src-" in html_doc
+
+
+def test_operator_console_alpha_scripts_write_expected_artifacts(tmp_path: Path) -> None:
+    ingestion_path = tmp_path / "ingestion-events.jsonl"
+    with ingestion_path.open("w", encoding="utf-8") as handle:
+        for record in sample_m6d_ingestion_records():
+            handle.write(json.dumps(record, sort_keys=True) + "\n")
+
+    pipeline_dir = tmp_path / "pipeline"
+    migration_dir = tmp_path / "migration"
+    lineage_dir = tmp_path / "lineage"
+    control_dir = tmp_path / "controls"
+    readiness_dir = tmp_path / "readiness"
+    replay_plan_dir = tmp_path / "replay-plan"
+    replay_compare_dir = tmp_path / "replay-compare"
+    replay_approval_dir = tmp_path / "replay-approval"
+    replay_execution_dir = tmp_path / "replay-execution"
+    console_dir = tmp_path / "operator-console"
+
+    commands = [
+        [sys.executable, "scripts/build_source_control_pipeline.py", "--ingestion-path", str(ingestion_path), "--out-dir", str(pipeline_dir)],
+        [sys.executable, "scripts/build_ringcentral_lacrm_migration_packs.py", "--pipeline-dir", str(pipeline_dir), "--out-dir", str(migration_dir)],
+        [sys.executable, "scripts/build_durable_lineage_packs.py", "--pipeline-dir", str(pipeline_dir), "--migration-dir", str(migration_dir), "--out-dir", str(lineage_dir)],
+        [sys.executable, "scripts/build_replay_safe_ingestion_controls.py", "--lineage-dir", str(lineage_dir), "--migration-dir", str(migration_dir), "--out-dir", str(control_dir)],
+        [sys.executable, "scripts/build_lineage_replay_readiness_packs.py", "--lineage-dir", str(lineage_dir), "--control-dir", str(control_dir), "--migration-dir", str(migration_dir), "--out-dir", str(readiness_dir)],
+        [
+            sys.executable,
+            "scripts/build_source_replay_plan_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_plan_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_source_replay_compare_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_compare_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_source_replay_approval_journals.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--compare-dir",
+            str(replay_compare_dir),
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_approval_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_source_replay_execution_packs.py",
+            "--pipeline-dir",
+            str(pipeline_dir),
+            "--approval-dir",
+            str(replay_approval_dir),
+            "--compare-dir",
+            str(replay_compare_dir),
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--migration-dir",
+            str(migration_dir),
+            "--lineage-dir",
+            str(lineage_dir),
+            "--control-dir",
+            str(control_dir),
+            "--readiness-dir",
+            str(readiness_dir),
+            "--out-dir",
+            str(replay_execution_dir),
+        ],
+        [
+            sys.executable,
+            "scripts/build_operator_console_alpha.py",
+            "--plan-dir",
+            str(replay_plan_dir),
+            "--compare-dir",
+            str(replay_compare_dir),
+            "--approval-dir",
+            str(replay_approval_dir),
+            "--execution-dir",
+            str(replay_execution_dir),
+            "--out-dir",
+            str(console_dir),
+        ],
+    ]
+
+    for command in commands:
+        proc = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 0, proc.stderr
+
+    rollup = json.loads((console_dir / "operator_console_alpha_rollup.json").read_text(encoding="utf-8"))
+    model = json.loads((console_dir / "operator_console_alpha_model.json").read_text(encoding="utf-8"))
+    html_text = (console_dir / "operator_console_alpha.html").read_text(encoding="utf-8")
+
+    assert rollup["source_count"] == 4
+    assert model["summary"]["execution_pack_count"] == 2
+    assert "Source Replay Operator Console Alpha" in html_text
