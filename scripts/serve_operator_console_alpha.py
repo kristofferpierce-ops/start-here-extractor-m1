@@ -25,7 +25,7 @@ class OperatorConsoleHandler(SimpleHTTPRequestHandler):
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Serve the operator console workbench and session toolkit locally")
+    parser = argparse.ArgumentParser(description="Serve the operator console workbench, decision package preview, and dry-run runner preflight locally")
     parser.add_argument(
         "--console-dir",
         required=True,

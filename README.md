@@ -806,3 +806,20 @@ Safety model:
 - no backend mutations
 - no live downstream writes
 - exported session packages are for review and handoff only
+
+## M6E Block 5
+
+This block extends the operator console with a decision package toolkit and dry-run runner preflight while remaining fully local and non-destructive.
+
+Added in this block:
+- richer decision package export and import controls
+- current decision package preview
+- local decision package validation
+- dry-run runner specification export
+- execution preflight summary panel
+- hover help and click guidance on every new interactive control
+
+Safety boundary:
+- no live downstream writes
+- no backend mutations from the UI
+- all decision packages and runner specs remain local browser-side planning artifacts until explicitly exported

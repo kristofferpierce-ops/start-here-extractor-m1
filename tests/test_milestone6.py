@@ -1653,3 +1653,35 @@ def test_operator_console_alpha_html_contains_session_package_controls() -> None
     assert "Session Timeline" in html_doc
     assert "Select Review Inbox" in html_doc
     assert "Select High Priority" in html_doc
+
+def test_operator_console_alpha_artifacts_include_decision_package_and_runner_specs() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    model = console["operator_console_alpha_model"]
+    rollup = console["operator_console_alpha_rollup"]
+
+    assert "decision-packages" in model["workbench"]["capabilities"]
+    assert "decision-package-validation" in model["workbench"]["capabilities"]
+    assert "dry-run-preflight" in model["workbench"]["capabilities"]
+    assert "runner-spec-export" in model["workbench"]["capabilities"]
+    assert model["workbench"]["package_formats"] == ["json", "jsonl"]
+    assert model["workbench"]["runner_formats"] == ["json"]
+    assert model["summary"]["package_format_count"] == len(model["workbench"]["package_formats"])
+    assert model["summary"]["runner_format_count"] == len(model["workbench"]["runner_formats"])
+    assert rollup["package_format_count"] == len(model["workbench"]["package_formats"])
+    assert rollup["runner_format_count"] == len(model["workbench"]["runner_formats"])
+
+
+def test_operator_console_alpha_html_contains_decision_package_and_runner_controls() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    html_doc = console["operator_console_alpha_html"]["html"]
+
+    assert "Decision Package Preview" in html_doc
+    assert "Execution Preflight" in html_doc
+    assert "Export Decision Package JSON" in html_doc
+    assert "Export Decision Package JSONL" in html_doc
+    assert "Copy Decision Package Preview" in html_doc
+    assert "Load Decision Package" in html_doc
+    assert "Validate Decision Package" in html_doc
+    assert "Export Runner Spec JSON" in html_doc
+    assert "Copy Runner Spec" in html_doc
+    assert "data-help=" in html_doc

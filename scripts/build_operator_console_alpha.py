@@ -13,7 +13,7 @@ from start_here_extractor.source_replay_execution import load_approval_documents
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build an enriched operator console, local draft workbench, and session package toolkit from replay plan, compare, approval, and execution artifacts"
+        description="Build an enriched operator console, local draft workbench, decision package toolkit, and dry-run runner preflight from replay plan, compare, approval, and execution artifacts"
     )
     parser.add_argument("--plan-dir", required=True, help="Directory containing source replay plan artifacts")
     parser.add_argument("--compare-dir", required=True, help="Directory containing source replay compare artifacts")
@@ -29,7 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--subtitle",
         required=False,
-        default="Read-only operator console and local draft workbench with session packages, history, and batch review flows for replay planning, comparison, approval, and execution triage.",
+        default="Read-only operator console and local draft workbench with session packages, decision package previews, dry-run runner preflight, history, and batch review flows for replay planning, comparison, approval, and execution triage.",
         help="Subtitle displayed in the generated operator console",
     )
     return parser

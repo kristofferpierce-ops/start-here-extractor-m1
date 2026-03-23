@@ -552,14 +552,21 @@ def build_operator_console_alpha_artifacts(
             "batch-impact-preview",
             "local-audit-timeline",
             "queue-shortcuts",
+            "decision-packages",
+            "decision-package-validation",
+            "dry-run-preflight",
+            "runner-spec-export",
         ],
         "session_formats": ["json"],
+        "package_formats": ["json", "jsonl"],
+        "runner_formats": ["json"],
         "history_limit": 60,
         "selection_shortcuts": ["filtered-records", "review-inbox", "high-priority-review"],
         "notes": [
             "Client-side draft actions only. No backend mutations occur from this console.",
             "Exported draft decisions are intended for review and future automation handoff.",
             "Session packages bundle local filters, selected rows, session notes, draft decisions, and timeline history for offline review.",
+            "Decision packages and dry-run runner specs are local planning artifacts for human review before any future automation step.",
         ],
     }
 
@@ -605,6 +612,8 @@ def build_operator_console_alpha_artifacts(
         },
         "workbench_capability_count": len(workbench["capabilities"]),
         "session_format_count": len(workbench.get("session_formats") or []),
+        "package_format_count": len(workbench.get("package_formats") or []),
+        "runner_format_count": len(workbench.get("runner_formats") or []),
     }
 
     model = {
@@ -624,6 +633,8 @@ def build_operator_console_alpha_artifacts(
             "warning_count": len(warnings),
             "draft_action_count": len(workbench["decision_actions"]),
             "session_format_count": len(workbench.get("session_formats") or []),
+            "package_format_count": len(workbench.get("package_formats") or []),
+            "runner_format_count": len(workbench.get("runner_formats") or []),
         },
         "rollup": rollup,
         "workbench": workbench,
@@ -1141,10 +1152,20 @@ def render_operator_console_alpha_html(model: dict) -> str:
             <button id="exportDraftJsonlBtn" type="button" title="Click to download the staged draft decisions as JSONL, one line per source key.">Export Draft JSONL</button>
             <button id="exportDraftJsonBtn" type="button" title="Click to download the staged draft decisions and summary metadata as a JSON document.">Export Draft Summary JSON</button>
             <button id="copyDraftPreviewBtn" type="button" class="secondary" title="Click to copy the current draft-decision JSONL preview to your clipboard.">Copy Draft Preview</button>
+            <button id="exportDecisionPackageJsonBtn" type="button" title="Click to export a decision package JSON bundle with staged draft decisions, filters, selection context, and metadata.">Export Decision Package JSON</button>
+            <button id="exportDecisionPackageJsonlBtn" type="button" title="Click to export only the decision-package records as JSONL for external tooling or offline review.">Export Decision Package JSONL</button>
+            <button id="copyDecisionPackagePreviewBtn" type="button" class="secondary" title="Click to copy the current decision-package JSON preview to your clipboard.">Copy Decision Package Preview</button>
             <label class="file-label" for="loadDraftInput" title="Click to load previously exported draft decisions back into the workbench. This only updates the in-browser state.">
               Load Draft Decisions
               <input id="loadDraftInput" type="file" accept="application/json,.json,.jsonl,.txt">
             </label>
+            <label class="file-label" for="loadDecisionPackageInput" title="Click to load a decision-package JSON or JSONL file into the local workbench. This only updates the browser state after validation.">
+              Load Decision Package
+              <input id="loadDecisionPackageInput" type="file" accept="application/json,.json,.jsonl,.txt">
+            </label>
+            <button id="validateDecisionPackageBtn" type="button" class="secondary" title="Click to validate the currently staged decision package and view a summary in the execution preflight panel.">Validate Decision Package</button>
+            <button id="exportRunnerSpecBtn" type="button" class="secondary" title="Click to export a dry-run runner specification describing what would be executed from the current drafts and selection.">Export Runner Spec JSON</button>
+            <button id="copyRunnerSpecBtn" type="button" class="secondary" title="Click to copy the current dry-run runner specification to your clipboard.">Copy Runner Spec</button>
             <button id="exportSessionBtn" type="button" class="secondary" title="Click to export the full local workbench session package, including filters, selection, session notes, draft decisions, and timeline history.">Save Session Package</button>
             <label class="file-label" for="loadSessionInput" title="Click to load a previously exported session package back into the workbench. This updates only the in-browser state.">
               Load Session Package
@@ -1214,6 +1235,22 @@ def render_operator_console_alpha_html(model: dict) -> str:
           <div id="draftList" class="review-list"></div>
         </div>
 
+        <div class="section-card" title="This panel previews the current local decision package that would be exported from the staged draft decisions.">
+          <div class="section-header">
+            <div class="section-title">Decision Package Preview <span class="help-tab" tabindex="0" data-help="This preview shows the structured decision package that can be exported as JSON or JSONL. It stays entirely local to the browser.">?</span></div>
+            <div class="section-meta" id="packageMeta"></div>
+          </div>
+          <pre id="packagePreview" class="detail-panel active"></pre>
+        </div>
+
+        <div class="section-card" title="This panel summarizes a dry-run execution preflight from the current staged decisions and selection.">
+          <div class="section-header">
+            <div class="section-title">Execution Preflight <span class="help-tab" tabindex="0" data-help="This preflight estimates what a future dry-run runner would process from the current local decision package and selection. It does not execute anything.">?</span></div>
+            <div class="section-meta" id="preflightMeta"></div>
+          </div>
+          <div id="preflightList" class="review-list"></div>
+        </div>
+
         <div class="section-card" title="This panel shows the local workbench timeline. It records in-browser actions like selection changes, draft actions, imports, exports, and undo or redo events.">
           <div class="section-header">
             <div class="section-title">Session Timeline <span class="help-tab" tabindex="0" data-help="This timeline is local to the browser. It helps operators understand what actions have been staged during the current workbench session.">?</span></div>
@@ -1255,6 +1292,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
     const DRAFT_KEY = 'operatorConsoleAlphaDraftDecisions';
     const SESSION_NOTES_KEY = 'operatorConsoleAlphaSessionNotes';
     const TIMELINE_KEY = 'operatorConsoleAlphaTimeline';
+    const LAST_PACKAGE_VALIDATION_KEY = 'operatorConsoleAlphaLastPackageValidation';
     const HISTORY_LIMIT = 60;
     let model = DEFAULT_MODEL;
     let filteredRecords = [];
@@ -1262,6 +1300,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
     let draftDecisions = loadDraftDecisions();
     let sessionNotes = loadSessionNotes();
     let timelineItems = loadTimelineItems();
+    let lastPackageValidation = loadLastPackageValidation();
     let historySnapshots = [];
     let historyIndex = -1;
 
@@ -1278,6 +1317,10 @@ def render_operator_console_alpha_html(model: dict) -> str:
       reviewList: document.getElementById('reviewList'),
       draftList: document.getElementById('draftList'),
       draftMeta: document.getElementById('draftMeta'),
+      packageMeta: document.getElementById('packageMeta'),
+      packagePreview: document.getElementById('packagePreview'),
+      preflightMeta: document.getElementById('preflightMeta'),
+      preflightList: document.getElementById('preflightList'),
       workbenchMeta: document.getElementById('workbenchMeta'),
       selectionMeta: document.getElementById('selectionMeta'),
       detailMeta: document.getElementById('detailMeta'),
@@ -1318,7 +1361,14 @@ def render_operator_console_alpha_html(model: dict) -> str:
       exportDraftJsonlBtn: document.getElementById('exportDraftJsonlBtn'),
       exportDraftJsonBtn: document.getElementById('exportDraftJsonBtn'),
       copyDraftPreviewBtn: document.getElementById('copyDraftPreviewBtn'),
+      exportDecisionPackageJsonBtn: document.getElementById('exportDecisionPackageJsonBtn'),
+      exportDecisionPackageJsonlBtn: document.getElementById('exportDecisionPackageJsonlBtn'),
+      copyDecisionPackagePreviewBtn: document.getElementById('copyDecisionPackagePreviewBtn'),
       loadDraftInput: document.getElementById('loadDraftInput'),
+      loadDecisionPackageInput: document.getElementById('loadDecisionPackageInput'),
+      validateDecisionPackageBtn: document.getElementById('validateDecisionPackageBtn'),
+      exportRunnerSpecBtn: document.getElementById('exportRunnerSpecBtn'),
+      copyRunnerSpecBtn: document.getElementById('copyRunnerSpecBtn'),
       exportSessionBtn: document.getElementById('exportSessionBtn'),
       loadSessionInput: document.getElementById('loadSessionInput'),
       undoDraftBtn: document.getElementById('undoDraftBtn'),
@@ -1413,6 +1463,27 @@ def render_operator_console_alpha_html(model: dict) -> str:
     function saveTimelineItems() {
       try {
         localStorage.setItem(TIMELINE_KEY, JSON.stringify(timelineItems.slice(0, HISTORY_LIMIT)));
+      } catch (error) {
+        // ignore storage failures
+      }
+    }
+
+    function loadLastPackageValidation() {
+      try {
+        const raw = localStorage.getItem(LAST_PACKAGE_VALIDATION_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function saveLastPackageValidation() {
+      try {
+        if (lastPackageValidation) {
+          localStorage.setItem(LAST_PACKAGE_VALIDATION_KEY, JSON.stringify(lastPackageValidation));
+        } else {
+          localStorage.removeItem(LAST_PACKAGE_VALIDATION_KEY);
+        }
       } catch (error) {
         // ignore storage failures
       }
@@ -1659,6 +1730,269 @@ def render_operator_console_alpha_html(model: dict) -> str:
       exportBlob(JSON.stringify(payload, null, 2), 'operator_console_draft_decisions.json', 'application/json;charset=utf-8');
     }
 
+    function buildDecisionPackage() {
+      const decisions = Object.values(draftDecisions).sort((a, b) => String(a.source_key).localeCompare(String(b.source_key)));
+      return {
+        exported_at: new Date().toISOString(),
+        schema_version: model.schema_version || 'unknown',
+        package_type: 'operator-console-decision-package',
+        title: model.title || 'Source Replay Operator Console Alpha',
+        subtitle: model.subtitle || '',
+        workbench: {
+          mode: (model.workbench && model.workbench.mode) || 'draft-only-local',
+          client_side_only: true,
+          mutates_backend: false,
+          package_formats: (model.workbench && model.workbench.package_formats) || ['json', 'jsonl'],
+          runner_formats: (model.workbench && model.workbench.runner_formats) || ['json'],
+        },
+        filters: {
+          search: state.search,
+          current_stage: state.currentStage,
+          replay_mode: state.replayMode,
+          source_system: state.sourceSystem,
+          source_entity_type: state.sourceEntityType,
+          compare_outcome: state.compareOutcome,
+          approval_status: state.approvalStatus,
+          execution_status: state.executionStatus,
+          review_priority: state.reviewPriority,
+          reason_code: state.reasonCode,
+          review_stage: state.reviewStage,
+          sort_mode: state.sortMode,
+          review_only: Boolean(state.reviewOnly),
+          only_selected: Boolean(state.onlySelected),
+        },
+        selection: {
+          active_source_key: state.selectedSourceKey || null,
+          selected_source_keys: Array.from(state.selectedSourceKeys || []).sort(),
+          selected_count: (state.selectedSourceKeys || []).length,
+          visible_count: filteredRecords.length,
+        },
+        session_notes: sessionNotes || '',
+        draft_count: decisions.length,
+        action_counts: draftCountByAction(),
+        decisions: decisions,
+      };
+    }
+
+    function buildDecisionPackageJsonlLines() {
+      return buildDecisionPackage().decisions.map((item) => JSON.stringify(item));
+    }
+
+    function normalizeDecisionPackageRecords(payload, rawText) {
+      if (Array.isArray(payload)) {
+        return payload;
+      }
+      if (payload && Array.isArray(payload.decisions)) {
+        return payload.decisions;
+      }
+      if (payload && Array.isArray(payload.draft_decisions)) {
+        return payload.draft_decisions;
+      }
+      if (rawText && rawText.trim()) {
+        return rawText.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      }
+      return [];
+    }
+
+    function validateDecisionPackageRecords(records) {
+      const known = new Set((model.records || []).map((item) => item.source_key));
+      const errors = [];
+      const normalized = [];
+      (records || []).forEach((record, index) => {
+        if (!record || typeof record !== 'object') {
+          errors.push('Record ' + index + ' is not an object.');
+          return;
+        }
+        const sourceKey = String(record.source_key || '').trim();
+        const action = String(record.action || '').trim();
+        if (!sourceKey) {
+          errors.push('Record ' + index + ' is missing source_key.');
+          return;
+        }
+        if (!['approve', 'reject', 'defer'].includes(action)) {
+          errors.push('Record ' + sourceKey + ' has invalid action ' + action + '.');
+          return;
+        }
+        if (!known.has(sourceKey)) {
+          errors.push('Record ' + sourceKey + ' is not present in the loaded console model.');
+          return;
+        }
+        normalized.push(record);
+      });
+      return {
+        valid: errors.length === 0,
+        record_count: normalized.length,
+        errors: errors,
+        records: normalized,
+      };
+    }
+
+    function buildRunnerSpec() {
+      const decisionPackage = buildDecisionPackage();
+      const draftKeys = decisionPackage.decisions.map((item) => item.source_key);
+      const selectedKeys = Array.from(new Set(state.selectedSourceKeys || []));
+      const candidateKeys = Array.from(new Set(draftKeys.concat(selectedKeys))).sort();
+      const candidateRecords = (model.records || []).filter((record) => candidateKeys.includes(record.source_key));
+      const stageCounts = candidateRecords.reduce((counts, record) => {
+        const stage = record.current_stage || 'unknown';
+        counts[stage] = (counts[stage] || 0) + 1;
+        return counts;
+      }, {});
+      const readyKeys = candidateRecords.filter((record) => record.current_stage === 'execution-ready').map((record) => record.source_key).sort();
+      const blockedKeys = candidateRecords.filter((record) => String(record.current_stage || '').includes('review')).map((record) => record.source_key).sort();
+      const noOpKeys = candidateRecords.filter((record) => record.execution_status === 'not-required' || record.current_stage === 'completed-no-op').map((record) => record.source_key).sort();
+      return {
+        exported_at: new Date().toISOString(),
+        schema_version: model.schema_version || 'unknown',
+        spec_type: 'operator-console-dry-run-runner',
+        title: model.title || 'Source Replay Operator Console Alpha',
+        dry_run_only: true,
+        selected_count: selectedKeys.length,
+        draft_count: draftKeys.length,
+        candidate_count: candidateKeys.length,
+        selected_source_keys: selectedKeys.sort(),
+        decision_source_keys: draftKeys.sort(),
+        candidate_source_keys: candidateKeys,
+        action_counts: decisionPackage.action_counts,
+        stage_counts: stageCounts,
+        ready_for_dry_run_keys: readyKeys,
+        blocked_review_keys: blockedKeys,
+        no_execution_required_keys: noOpKeys,
+        notes: [
+          'This runner specification is generated locally from the current browser workbench state.',
+          'It is intended for dry-run planning only and performs no live writes.',
+        ],
+      };
+    }
+
+    function buildExecutionPreflight() {
+      const runner = buildRunnerSpec();
+      const validation = validateDecisionPackageRecords(Object.values(draftDecisions || {}));
+      return {
+        generated_at: new Date().toISOString(),
+        candidate_count: runner.candidate_count,
+        selected_count: runner.selected_count,
+        draft_count: runner.draft_count,
+        ready_count: runner.ready_for_dry_run_keys.length,
+        blocked_count: runner.blocked_review_keys.length,
+        no_execution_required_count: runner.no_execution_required_keys.length,
+        action_counts: runner.action_counts,
+        stage_counts: runner.stage_counts,
+        validation: validation,
+        runner_spec: runner,
+      };
+    }
+
+    function exportDecisionPackageJson() {
+      const payload = buildDecisionPackage();
+      exportBlob(JSON.stringify(payload, null, 2), 'operator_console_decision_package.json', 'application/json;charset=utf-8');
+      recordTimeline('decision-package-export', 'Exported a decision package JSON bundle.', { draft_count: payload.draft_count });
+      render();
+    }
+
+    function exportDecisionPackageJsonl() {
+      const lines = buildDecisionPackageJsonlLines();
+      exportBlob(lines.join('\n'), 'operator_console_decision_package.jsonl', 'application/x-ndjson;charset=utf-8');
+      recordTimeline('decision-package-export', 'Exported a decision package JSONL bundle.', { draft_count: Object.keys(draftDecisions || {}).length });
+      render();
+    }
+
+    async function copyDecisionPackagePreview() {
+      const payload = buildDecisionPackage();
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+        recordTimeline('decision-package-copy', 'Copied the decision package preview.', { draft_count: payload.draft_count });
+        render();
+      } catch (error) {
+        window.alert('Unable to copy the decision package preview.');
+      }
+    }
+
+    function loadDecisionPackageRecords(records, sourceLabel) {
+      const validation = validateDecisionPackageRecords(records);
+      lastPackageValidation = {
+        checked_at: new Date().toISOString(),
+        source: sourceLabel,
+        valid: validation.valid,
+        record_count: validation.record_count,
+        error_count: validation.errors.length,
+        errors: validation.errors,
+      };
+      saveLastPackageValidation();
+      if (!validation.valid) {
+        recordTimeline('decision-package-validate', 'Decision package validation failed.', { error_count: validation.errors.length });
+        render();
+        window.alert('Decision package validation failed. Review the Execution Preflight panel for details.');
+        return;
+      }
+      pushHistorySnapshot('Before loading decision package');
+      validation.records.forEach((record) => {
+        draftDecisions[record.source_key] = record;
+      });
+      saveDraftDecisions();
+      recordTimeline('decision-package-import', 'Loaded a validated decision package into the local workbench.', { record_count: validation.record_count });
+      render();
+    }
+
+    function handleDecisionPackageFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const rawText = String(reader.result || '');
+          let payload = null;
+          let records = [];
+          if (file.name.toLowerCase().endsWith('.jsonl') || file.name.toLowerCase().endsWith('.txt')) {
+            records = normalizeDecisionPackageRecords(null, rawText);
+          } else {
+            payload = JSON.parse(rawText);
+            records = normalizeDecisionPackageRecords(payload, rawText);
+          }
+          loadDecisionPackageRecords(records, file.name || 'decision-package');
+        } catch (error) {
+          window.alert('Unable to parse the selected decision package file.');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function validateCurrentDecisionPackage() {
+      const validation = validateDecisionPackageRecords(Object.values(draftDecisions || {}));
+      lastPackageValidation = {
+        checked_at: new Date().toISOString(),
+        source: 'current-browser-drafts',
+        valid: validation.valid,
+        record_count: validation.record_count,
+        error_count: validation.errors.length,
+        errors: validation.errors,
+      };
+      saveLastPackageValidation();
+      recordTimeline('decision-package-validate', validation.valid ? 'Validated the current decision package.' : 'Decision package validation failed.', { error_count: validation.errors.length, record_count: validation.record_count });
+      render();
+      if (!validation.valid) {
+        window.alert('Decision package validation failed. Review the Execution Preflight panel for details.');
+      }
+    }
+
+    function exportRunnerSpecJson() {
+      const payload = buildRunnerSpec();
+      exportBlob(JSON.stringify(payload, null, 2), 'operator_console_runner_spec.json', 'application/json;charset=utf-8');
+      recordTimeline('runner-spec-export', 'Exported a dry-run runner specification.', { candidate_count: payload.candidate_count });
+      render();
+    }
+
+    async function copyRunnerSpec() {
+      const payload = buildRunnerSpec();
+      try {
+        await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+        recordTimeline('runner-spec-copy', 'Copied the dry-run runner specification.', { candidate_count: payload.candidate_count });
+        render();
+      } catch (error) {
+        window.alert('Unable to copy the runner specification.');
+      }
+    }
+
     function buildSessionPackage() {
       return {
         exported_at: new Date().toISOString(),
@@ -1842,6 +2176,8 @@ def render_operator_console_alpha_html(model: dict) -> str:
         ['Sources', model.rollup.source_count, 'Count of merged source rows in the console model.', null, null],
         ['Review Items', model.rollup.review_item_count, 'Count of all review queue entries merged into the console model.', 'reviewOnly', true],
         ['Draft Decisions', Object.keys(draftDecisions).length, 'Count of local draft decisions staged in the browser workbench.', null, null],
+        ['Decision Formats', (model.rollup.package_format_count || 0), 'Number of supported decision-package export formats available in the workbench.', null, null],
+        ['Runner Formats', (model.rollup.runner_format_count || 0), 'Number of supported dry-run runner specification formats available in the workbench.', null, null],
         ['Warnings', model.rollup.warning_count, 'Derived data-health and backlog warnings based on the current replay artifacts.', null, null],
         ['Execution Ready', (model.rollup.current_stage_counts || {})['execution-ready'] || 0, 'Count of sources currently marked execution-ready.', 'currentStage', 'execution-ready'],
         ['Execution Review', (model.rollup.current_stage_counts || {})['execution-review'] || 0, 'Count of sources currently blocked in execution review.', 'currentStage', 'execution-review'],
@@ -2079,6 +2415,36 @@ def render_operator_console_alpha_html(model: dict) -> str:
       });
     }
 
+    function renderDecisionPackagePreview() {
+      const payload = buildDecisionPackage();
+      const validation = lastPackageValidation || validateDecisionPackageRecords(Object.values(draftDecisions || {}));
+      els.packageMeta.textContent = payload.draft_count + ' decision(s) • formats: ' + ((model.workbench && model.workbench.package_formats) || ['json', 'jsonl']).join(', ');
+      const preview = {
+        package: payload,
+        validation: validation,
+      };
+      els.packagePreview.textContent = JSON.stringify(preview, null, 2);
+    }
+
+    function renderExecutionPreflight() {
+      const preflight = buildExecutionPreflight();
+      els.preflightMeta.textContent = preflight.candidate_count + ' candidate source(s) • ' + preflight.ready_count + ' ready for dry-run';
+      const runner = preflight.runner_spec || {};
+      const cards = [
+        ['Candidate Sources', preflight.candidate_count, 'Sources that would be included in the current dry-run runner spec.'],
+        ['Ready for Dry-Run', preflight.ready_count, 'Sources already marked execution-ready.'],
+        ['Blocked by Review', preflight.blocked_count, 'Sources still blocked in a review stage.'],
+        ['No Execution Required', preflight.no_execution_required_count, 'Sources that currently indicate no execution action is required.'],
+        ['Decision Package Valid', preflight.validation && preflight.validation.valid ? 'yes' : 'no', 'Result of validating the currently staged decision package.'],
+      ];
+      const validationErrors = (preflight.validation && preflight.validation.errors) || [];
+      const errorBlock = validationErrors.length
+        ? '<div class="review-item-card active" title="These validation issues must be resolved before a decision package should be handed off."><div class="review-item-top"><strong>Decision Package Validation Errors</strong><span class="chip high">' + validationErrors.length + '</span></div><div class="muted" style="margin-top:6px">' + validationErrors.map((item) => escapeHtml(item)).join('<br>') + '</div></div>'
+        : '';
+      const runnerBlock = '<div class="review-item-card" title="This card summarizes the current dry-run runner specification. It is local only and does not execute anything."><div class="review-item-top"><strong>Runner Spec Summary</strong><span class="chip">dry-run</span></div><div class="muted" style="margin-top:6px">Selected: ' + escapeHtml(runner.selected_count || 0) + ' • Drafts: ' + escapeHtml(runner.draft_count || 0) + ' • Candidates: ' + escapeHtml(runner.candidate_count || 0) + '</div><pre style="margin-top:8px">' + escapeHtml(JSON.stringify(runner, null, 2)) + '</pre></div>';
+      els.preflightList.innerHTML = cards.map(([label, value, help]) => '<div class="review-item-card" title="' + escapeHtml(help) + '"><div class="review-item-top"><strong>' + escapeHtml(label) + '</strong><span class="chip">' + escapeHtml(value) + '</span></div><div class="muted" style="margin-top:6px">' + escapeHtml(help) + '</div></div>').join('') + errorBlock + runnerBlock;
+    }
+
     function renderTimeline() {
       const items = timelineItems || [];
       els.timelineMeta.textContent = items.length + ' local event(s)';
@@ -2202,7 +2568,8 @@ def render_operator_console_alpha_html(model: dict) -> str:
       els.reviewOnlyToggle.classList.toggle('active', state.reviewOnly);
       els.selectedOnlyToggle.textContent = 'Only Selected: ' + (state.onlySelected ? 'On' : 'Off');
       els.selectedOnlyToggle.classList.toggle('active', state.onlySelected);
-      els.workbenchMeta.textContent = Object.keys(draftDecisions).length + ' draft(s) • ' + (state.selectedSourceKeys || []).length + ' selected row(s)';
+      const validationSuffix = lastPackageValidation ? (' • package valid: ' + (lastPackageValidation.valid ? 'yes' : 'no')) : '';
+      els.workbenchMeta.textContent = Object.keys(draftDecisions).length + ' draft(s) • ' + (state.selectedSourceKeys || []).length + ' selected row(s)' + validationSuffix;
       els.selectionMeta.textContent = (state.selectedSourceKeys || []).length + ' selected row(s) • active row: ' + (state.selectedSourceKey || 'none');
       updateHistoryButtons();
     }
@@ -2272,6 +2639,8 @@ def render_operator_console_alpha_html(model: dict) -> str:
       renderRows();
       renderReviewInbox();
       renderDraftQueue();
+      renderDecisionPackagePreview();
+      renderExecutionPreflight();
       renderTimeline();
       renderDetail();
       renderFilteredSummary();
@@ -2358,7 +2727,14 @@ def render_operator_console_alpha_html(model: dict) -> str:
     els.exportDraftJsonlBtn.addEventListener('click', exportDraftJsonl);
     els.exportDraftJsonBtn.addEventListener('click', exportDraftJson);
     els.copyDraftPreviewBtn.addEventListener('click', copyDraftPreview);
+    els.exportDecisionPackageJsonBtn.addEventListener('click', exportDecisionPackageJson);
+    els.exportDecisionPackageJsonlBtn.addEventListener('click', exportDecisionPackageJsonl);
+    els.copyDecisionPackagePreviewBtn.addEventListener('click', copyDecisionPackagePreview);
     els.loadDraftInput.addEventListener('change', handleDraftFile);
+    els.loadDecisionPackageInput.addEventListener('change', handleDecisionPackageFile);
+    els.validateDecisionPackageBtn.addEventListener('click', validateCurrentDecisionPackage);
+    els.exportRunnerSpecBtn.addEventListener('click', exportRunnerSpecJson);
+    els.copyRunnerSpecBtn.addEventListener('click', copyRunnerSpec);
     els.exportSessionBtn.addEventListener('click', exportSessionPackage);
     els.loadSessionInput.addEventListener('change', handleSessionFile);
     els.undoDraftBtn.addEventListener('click', undoDraftChange);
