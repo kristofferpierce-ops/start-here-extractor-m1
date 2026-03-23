@@ -763,3 +763,46 @@ Safety posture remains unchanged:
 - client-side
 - no live downstream writes
 - no approval or execution mutations triggered from the UI
+
+## M6E Block 3
+
+This block upgrades the operator console into a local draft-decision workbench while staying client-side and non-destructive.
+
+Added in this block:
+- richer operator workbench controls inside `src/start_here_extractor/operator_console_alpha.py`
+- updated `scripts/build_operator_console_alpha.py`
+- updated `scripts/serve_operator_console_alpha.py`
+- targeted `tests/test_milestone6.py` coverage
+
+Workbench capabilities:
+- multi-select replay rows
+- draft approve, reject, and defer actions
+- draft note capture
+- local draft queue and draft preview panel
+- export draft decisions as JSONL or JSON
+- import previously exported draft decisions
+- persistent local browser state
+- hover help and click guidance on interactive controls
+
+Safety guardrails:
+- client-side only
+- no backend mutations
+- no live downstream writes
+- draft decisions are previews until exported and reviewed
+
+## M6E Block 4
+
+This block upgrades the operator console workbench with safe local session tooling.
+
+Added in this block:
+- saved session package export and import
+- undo and redo for local draft changes
+- session notes and local timeline history
+- review queue selection shortcuts
+- batch review flow improvements
+
+Safety model:
+- still client-side only
+- no backend mutations
+- no live downstream writes
+- exported session packages are for review and handoff only

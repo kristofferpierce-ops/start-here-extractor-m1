@@ -531,6 +531,37 @@ def build_operator_console_alpha_artifacts(
 
     reason_code_counts = _top_reason_counts(review_items)
     warnings = _build_warnings(records=records, review_items=review_items)
+    workbench = {
+        "mode": "draft-only-local",
+        "client_side_only": True,
+        "mutates_backend": False,
+        "decision_actions": ["approve", "reject", "defer"],
+        "selection_scopes": ["active-record", "selected-records", "filtered-records"],
+        "export_formats": ["json", "jsonl"],
+        "capabilities": [
+            "multi-select",
+            "draft-decisions",
+            "draft-preview",
+            "draft-export-json",
+            "draft-export-jsonl",
+            "draft-import",
+            "local-persistence",
+            "hover-help",
+            "session-packages",
+            "undo-redo-history",
+            "batch-impact-preview",
+            "local-audit-timeline",
+            "queue-shortcuts",
+        ],
+        "session_formats": ["json"],
+        "history_limit": 60,
+        "selection_shortcuts": ["filtered-records", "review-inbox", "high-priority-review"],
+        "notes": [
+            "Client-side draft actions only. No backend mutations occur from this console.",
+            "Exported draft decisions are intended for review and future automation handoff.",
+            "Session packages bundle local filters, selected rows, session notes, draft decisions, and timeline history for offline review.",
+        ],
+    }
 
     filter_options = {
         "current_stage": sorted({str(item.get("current_stage") or "unknown") for item in records}, key=_stage_rank),
@@ -572,6 +603,8 @@ def build_operator_console_alpha_artifacts(
             "approval_review": len(approval_queue_records),
             "execution_review": len(execution_review_records),
         },
+        "workbench_capability_count": len(workbench["capabilities"]),
+        "session_format_count": len(workbench.get("session_formats") or []),
     }
 
     model = {
@@ -589,8 +622,11 @@ def build_operator_console_alpha_artifacts(
             "execution_review_count": len(execution_review_records),
             "review_item_count": len(review_items),
             "warning_count": len(warnings),
+            "draft_action_count": len(workbench["decision_actions"]),
+            "session_format_count": len(workbench.get("session_formats") or []),
         },
         "rollup": rollup,
+        "workbench": workbench,
         "filter_options": filter_options,
         "warnings": warnings,
         "review_items": review_items,
@@ -698,13 +734,18 @@ def render_operator_console_alpha_html(model: dict) -> str:
       align-items: center;
       gap: 6px;
     }
-    input, select, button {
+    input, select, button, textarea {
       border-radius: 12px;
       border: 1px solid var(--line);
       background: var(--panel2);
       color: var(--text);
       padding: 10px 12px;
       font: inherit;
+    }
+    textarea {
+      resize: vertical;
+      min-height: 92px;
+      width: 100%;
     }
     button {
       cursor: pointer;
@@ -734,6 +775,35 @@ def render_operator_console_alpha_html(model: dict) -> str:
       padding: 10px 12px;
     }
     .button-row input[type=file] { display: none; }
+    .split-meta {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .draft-card {
+      background: var(--panel3);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      cursor: pointer;
+    }
+    .draft-card:hover, .draft-card.active { border-color: rgba(56,189,248,.65); }
+    .selection-check {
+      width: 16px;
+      height: 16px;
+      accent-color: #38bdf8;
+      cursor: pointer;
+    }
+    .sticky-actions {
+      position: sticky;
+      top: 0;
+      z-index: 3;
+      background: rgba(15, 23, 42, 0.94);
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 10px;
+      margin-bottom: 10px;
+    }
     .metrics { grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); }
     .metric-card {
       background: var(--panel);
@@ -1023,6 +1093,71 @@ def render_operator_console_alpha_html(model: dict) -> str:
       </div>
     </div>
 
+    <div class="section-card" title="Use the operator workbench to stage local approve, reject, or defer decisions for selected rows. These draft decisions stay client-side until you export them.">
+      <div class="section-header">
+        <div class="section-title">Operator Workbench <span class="help-tab" tabindex="0" data-help="The workbench lets you draft replay decisions locally, preview the resulting decision payloads, and export them for later review. It does not write to backend artifacts.">?</span></div>
+        <div class="section-meta" id="workbenchMeta"></div>
+      </div>
+      <div class="toolbar-grid">
+        <div class="control span-3">
+          <div class="control-label">Selection Tools <span class="help-tab" tabindex="0" data-help="Select filtered rows, clear the current selection, or focus the table on only the rows you have selected.">?</span></div>
+          <div class="button-row">
+            <button id="selectFilteredBtn" type="button" title="Click to select every currently visible row in the table.">Select Filtered Rows</button>
+            <button id="selectReviewInboxBtn" type="button" class="secondary" title="Click to select every source currently present in the review inbox.">Select Review Inbox</button>
+            <button id="selectHighPriorityBtn" type="button" class="secondary" title="Click to select only sources carrying a high-priority review item.">Select High Priority</button>
+            <button id="clearSelectionBtn" type="button" class="secondary" title="Click to clear the current multi-selection without changing the active row detail panel.">Clear Selection</button>
+            <button id="selectedOnlyToggle" type="button" class="secondary" title="Click to toggle showing only the rows you have selected.">Only Selected: Off</button>
+          </div>
+          <div class="split-meta muted" id="selectionMeta"></div>
+        </div>
+        <label class="control span-2" for="draftActionSelect">
+          <div class="control-label">Draft Action <span class="help-tab" tabindex="0" data-help="Choose which draft action to assign to the current selection or active row.">?</span></div>
+          <select id="draftActionSelect" title="Choose the draft decision action that will be staged locally.">
+            <option value="approve">approve</option>
+            <option value="reject">reject</option>
+            <option value="defer">defer</option>
+          </select>
+        </label>
+        <label class="control span-4" for="draftNoteInput">
+          <div class="control-label">Draft Note <span class="help-tab" tabindex="0" data-help="Add optional operator context that will be attached to every draft decision you stage from the current action controls.">?</span></div>
+          <textarea id="draftNoteInput" placeholder="Optional operator note for exported draft decisions" title="Type an optional note that will be included in newly staged draft decisions."></textarea>
+        </label>
+        <label class="control span-3" for="sessionNotesInput">
+          <div class="control-label">Session Notes <span class="help-tab" tabindex="0" data-help="Capture freeform notes about what you are reviewing in this local workbench session. Notes stay client-side unless you export a session package.">?</span></div>
+          <textarea id="sessionNotesInput" placeholder="Optional workbench session notes" title="Type local session notes that will be included in exported session packages."></textarea>
+        </label>
+        <div class="control span-3">
+          <div class="control-label">Draft Decision Actions <span class="help-tab" tabindex="0" data-help="Stage the selected action for the selected rows or for only the active row in the detail panel. These actions are stored only in the browser until exported.">?</span></div>
+          <div class="button-row">
+            <button id="applyDraftSelectedBtn" type="button" title="Click to stage the chosen draft action for every selected row.">Apply Draft to Selected</button>
+            <button id="applyDraftActiveBtn" type="button" class="secondary" title="Click to stage the chosen draft action for only the active row shown in the detail panel.">Apply Draft to Active Row</button>
+            <button id="removeDraftSelectedBtn" type="button" class="secondary" title="Click to remove staged draft decisions for the selected rows.">Remove Draft for Selected</button>
+            <button id="clearDraftsBtn" type="button" class="secondary" title="Click to clear every staged draft decision from this browser session.">Clear All Drafts</button>
+          </div>
+        </div>
+        <div class="control span-12 sticky-actions">
+          <div class="control-label">Draft Utilities <span class="help-tab" tabindex="0" data-help="Export or import draft decisions, or copy the preview that would be written to a decision journal. These utilities never mutate the backend.">?</span></div>
+          <div class="button-row">
+            <button id="exportDraftJsonlBtn" type="button" title="Click to download the staged draft decisions as JSONL, one line per source key.">Export Draft JSONL</button>
+            <button id="exportDraftJsonBtn" type="button" title="Click to download the staged draft decisions and summary metadata as a JSON document.">Export Draft Summary JSON</button>
+            <button id="copyDraftPreviewBtn" type="button" class="secondary" title="Click to copy the current draft-decision JSONL preview to your clipboard.">Copy Draft Preview</button>
+            <label class="file-label" for="loadDraftInput" title="Click to load previously exported draft decisions back into the workbench. This only updates the in-browser state.">
+              Load Draft Decisions
+              <input id="loadDraftInput" type="file" accept="application/json,.json,.jsonl,.txt">
+            </label>
+            <button id="exportSessionBtn" type="button" class="secondary" title="Click to export the full local workbench session package, including filters, selection, session notes, draft decisions, and timeline history.">Save Session Package</button>
+            <label class="file-label" for="loadSessionInput" title="Click to load a previously exported session package back into the workbench. This updates only the in-browser state.">
+              Load Session Package
+              <input id="loadSessionInput" type="file" accept="application/json,.json">
+            </label>
+            <button id="undoDraftBtn" type="button" class="secondary" title="Click to undo the most recent local draft or session change in this browser tab.">Undo Draft Change</button>
+            <button id="redoDraftBtn" type="button" class="secondary" title="Click to redo the last undone local draft or session change in this browser tab.">Redo Draft Change</button>
+            <button id="copySessionSummaryBtn" type="button" class="secondary" title="Click to copy a plain-text session summary of filters, selection, and draft actions.">Copy Session Summary</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="metrics" id="summaryCards"></div>
 
     <div class="board stack">
@@ -1052,6 +1187,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
           <table>
             <thead>
               <tr>
+                <th><span class="th-wrap">Select <span class="help-tab" tabindex="0" data-help="Use the checkbox to include a row in the multi-select workbench without changing the current filters.">?</span></span></th>
                 <th><span class="th-wrap">Source Key <span class="help-tab" tabindex="0" data-help="The unique source key and entity type for this replay record.">?</span></span></th>
                 <th><span class="th-wrap">Stage <span class="help-tab" tabindex="0" data-help="The current stage in the replay workflow.">?</span></span></th>
                 <th><span class="th-wrap">Replay Mode <span class="help-tab" tabindex="0" data-help="Whether the source is compare-only, resume-from-approved, or full-replay.">?</span></span></th>
@@ -1070,6 +1206,22 @@ def render_operator_console_alpha_html(model: dict) -> str:
       </div>
 
       <div class="stack">
+        <div class="section-card" title="This panel shows local draft decisions only. Clicking an item focuses the source row and opens its draft preview.">
+          <div class="section-header">
+            <div class="section-title">Draft Decision Queue <span class="help-tab" tabindex="0" data-help="This queue is purely local to the browser. It shows staged approve, reject, and defer decisions that can be exported for later review.">?</span></div>
+            <div class="section-meta" id="draftMeta"></div>
+          </div>
+          <div id="draftList" class="review-list"></div>
+        </div>
+
+        <div class="section-card" title="This panel shows the local workbench timeline. It records in-browser actions like selection changes, draft actions, imports, exports, and undo or redo events.">
+          <div class="section-header">
+            <div class="section-title">Session Timeline <span class="help-tab" tabindex="0" data-help="This timeline is local to the browser. It helps operators understand what actions have been staged during the current workbench session.">?</span></div>
+            <div class="section-meta" id="timelineMeta"></div>
+          </div>
+          <div id="timelineList" class="review-list"></div>
+        </div>
+
         <div class="section-card" title="This panel shows review queue items. Click an item to select its source in the main table and inspect details.">
           <div class="section-header">
             <div class="section-title">Review Inbox <span class="help-tab" tabindex="0" data-help="This list shows pending review items ordered by priority and review stage. Click an item to select its related source row.">?</span></div>
@@ -1086,10 +1238,12 @@ def render_operator_console_alpha_html(model: dict) -> str:
           <div class="detail-tabs">
             <button id="tabOverview" type="button" class="tab-btn" title="Click to view a condensed overview of the selected record.">Overview</button>
             <button id="tabReviewItems" type="button" class="tab-btn" title="Click to view the selected record's review items and queue evidence.">Review Items</button>
+            <button id="tabDraftPreview" type="button" class="tab-btn" title="Click to view the local draft decision preview for the selected record.">Draft Preview</button>
             <button id="tabRawJson" type="button" class="tab-btn" title="Click to view the raw merged JSON for the selected record.">Raw JSON</button>
           </div>
           <div id="panelOverview" class="detail-panel"></div>
           <div id="panelReviewItems" class="detail-panel"></div>
+          <div id="panelDraftPreview" class="detail-panel"></div>
           <pre id="panelRawJson" class="detail-panel"></pre>
         </div>
       </div>
@@ -1098,9 +1252,18 @@ def render_operator_console_alpha_html(model: dict) -> str:
   <script>
     const DEFAULT_MODEL = __PAYLOAD__;
     const STATE_KEY = 'operatorConsoleAlphaState';
+    const DRAFT_KEY = 'operatorConsoleAlphaDraftDecisions';
+    const SESSION_NOTES_KEY = 'operatorConsoleAlphaSessionNotes';
+    const TIMELINE_KEY = 'operatorConsoleAlphaTimeline';
+    const HISTORY_LIMIT = 60;
     let model = DEFAULT_MODEL;
     let filteredRecords = [];
     let filteredReviewItems = [];
+    let draftDecisions = loadDraftDecisions();
+    let sessionNotes = loadSessionNotes();
+    let timelineItems = loadTimelineItems();
+    let historySnapshots = [];
+    let historyIndex = -1;
 
     const els = {
       subtitle: document.getElementById('subtitle'),
@@ -1113,9 +1276,14 @@ def render_operator_console_alpha_html(model: dict) -> str:
       reviewMeta: document.getElementById('reviewMeta'),
       rows: document.getElementById('rows'),
       reviewList: document.getElementById('reviewList'),
+      draftList: document.getElementById('draftList'),
+      draftMeta: document.getElementById('draftMeta'),
+      workbenchMeta: document.getElementById('workbenchMeta'),
+      selectionMeta: document.getElementById('selectionMeta'),
       detailMeta: document.getElementById('detailMeta'),
       panelOverview: document.getElementById('panelOverview'),
       panelReviewItems: document.getElementById('panelReviewItems'),
+      panelDraftPreview: document.getElementById('panelDraftPreview'),
       panelRawJson: document.getElementById('panelRawJson'),
       search: document.getElementById('search'),
       stageFilter: document.getElementById('stageFilter'),
@@ -1135,8 +1303,32 @@ def render_operator_console_alpha_html(model: dict) -> str:
       exportCsvBtn: document.getElementById('exportCsvBtn'),
       copySelectedBtn: document.getElementById('copySelectedBtn'),
       loadModelInput: document.getElementById('loadModelInput'),
+      selectFilteredBtn: document.getElementById('selectFilteredBtn'),
+      selectReviewInboxBtn: document.getElementById('selectReviewInboxBtn'),
+      selectHighPriorityBtn: document.getElementById('selectHighPriorityBtn'),
+      clearSelectionBtn: document.getElementById('clearSelectionBtn'),
+      selectedOnlyToggle: document.getElementById('selectedOnlyToggle'),
+      draftActionSelect: document.getElementById('draftActionSelect'),
+      draftNoteInput: document.getElementById('draftNoteInput'),
+      sessionNotesInput: document.getElementById('sessionNotesInput'),
+      applyDraftSelectedBtn: document.getElementById('applyDraftSelectedBtn'),
+      applyDraftActiveBtn: document.getElementById('applyDraftActiveBtn'),
+      removeDraftSelectedBtn: document.getElementById('removeDraftSelectedBtn'),
+      clearDraftsBtn: document.getElementById('clearDraftsBtn'),
+      exportDraftJsonlBtn: document.getElementById('exportDraftJsonlBtn'),
+      exportDraftJsonBtn: document.getElementById('exportDraftJsonBtn'),
+      copyDraftPreviewBtn: document.getElementById('copyDraftPreviewBtn'),
+      loadDraftInput: document.getElementById('loadDraftInput'),
+      exportSessionBtn: document.getElementById('exportSessionBtn'),
+      loadSessionInput: document.getElementById('loadSessionInput'),
+      undoDraftBtn: document.getElementById('undoDraftBtn'),
+      redoDraftBtn: document.getElementById('redoDraftBtn'),
+      copySessionSummaryBtn: document.getElementById('copySessionSummaryBtn'),
+      timelineList: document.getElementById('timelineList'),
+      timelineMeta: document.getElementById('timelineMeta'),
       tabOverview: document.getElementById('tabOverview'),
       tabReviewItems: document.getElementById('tabReviewItems'),
+      tabDraftPreview: document.getElementById('tabDraftPreview'),
       tabRawJson: document.getElementById('tabRawJson'),
     };
 
@@ -1156,6 +1348,8 @@ def render_operator_console_alpha_html(model: dict) -> str:
         sortMode: 'priority-stage-key',
         reviewOnly: false,
         selectedSourceKey: null,
+        selectedSourceKeys: [],
+        onlySelected: false,
         detailTab: 'overview',
       },
       loadSavedState(),
@@ -1176,6 +1370,409 @@ def render_operator_console_alpha_html(model: dict) -> str:
       } catch (error) {
         // ignore storage failures
       }
+    }
+
+    function loadDraftDecisions() {
+      try {
+        const raw = localStorage.getItem(DRAFT_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      } catch (error) {
+        return {};
+      }
+    }
+
+
+    function loadSessionNotes() {
+      try {
+        return localStorage.getItem(SESSION_NOTES_KEY) || '';
+      } catch (error) {
+        return '';
+      }
+    }
+
+    function saveSessionNotes() {
+      try {
+        localStorage.setItem(SESSION_NOTES_KEY, sessionNotes || '');
+      } catch (error) {
+        // ignore storage failures
+      }
+    }
+
+    function loadTimelineItems() {
+      try {
+        const raw = localStorage.getItem(TIMELINE_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (error) {
+        return [];
+      }
+    }
+
+    function saveTimelineItems() {
+      try {
+        localStorage.setItem(TIMELINE_KEY, JSON.stringify(timelineItems.slice(0, HISTORY_LIMIT)));
+      } catch (error) {
+        // ignore storage failures
+      }
+    }
+
+    function recordTimeline(eventType, message, meta) {
+      const entry = {
+        event_type: eventType,
+        message: message,
+        recorded_at: new Date().toISOString(),
+        meta: meta || {},
+      };
+      timelineItems = [entry].concat(timelineItems || []).slice(0, HISTORY_LIMIT);
+      saveTimelineItems();
+    }
+
+    function getWorkbenchSnapshot() {
+      return {
+        draftDecisions: JSON.parse(JSON.stringify(draftDecisions || {})),
+        selectedSourceKeys: Array.from(state.selectedSourceKeys || []),
+        selectedSourceKey: state.selectedSourceKey || null,
+        onlySelected: Boolean(state.onlySelected),
+        draftNote: els.draftNoteInput ? (els.draftNoteInput.value || '') : '',
+        sessionNotes: sessionNotes || '',
+      };
+    }
+
+    function applyWorkbenchSnapshot(snapshot, reasonLabel) {
+      draftDecisions = JSON.parse(JSON.stringify(snapshot.draftDecisions || {}));
+      state.selectedSourceKeys = Array.from(snapshot.selectedSourceKeys || []);
+      state.selectedSourceKey = snapshot.selectedSourceKey || state.selectedSourceKey || null;
+      state.onlySelected = Boolean(snapshot.onlySelected);
+      if (els.draftNoteInput) {
+        els.draftNoteInput.value = snapshot.draftNote || '';
+      }
+      sessionNotes = snapshot.sessionNotes || '';
+      if (els.sessionNotesInput) {
+        els.sessionNotesInput.value = sessionNotes;
+      }
+      saveDraftDecisions();
+      saveSessionNotes();
+      recordTimeline('history-restore', reasonLabel, { draft_count: Object.keys(draftDecisions || {}).length });
+    }
+
+    function pushHistorySnapshot(reasonLabel) {
+      const snapshot = getWorkbenchSnapshot();
+      historySnapshots = historySnapshots.slice(0, historyIndex + 1);
+      historySnapshots.push(snapshot);
+      if (historySnapshots.length > HISTORY_LIMIT) {
+        historySnapshots = historySnapshots.slice(historySnapshots.length - HISTORY_LIMIT);
+      }
+      historyIndex = historySnapshots.length - 1;
+      if (reasonLabel) {
+        recordTimeline('history-save', reasonLabel, { draft_count: Object.keys(snapshot.draftDecisions || {}).length });
+      }
+      updateHistoryButtons();
+    }
+
+    function undoDraftChange() {
+      if (historyIndex <= 0) {
+        window.alert('Nothing to undo yet.');
+        return;
+      }
+      historyIndex -= 1;
+      applyWorkbenchSnapshot(historySnapshots[historyIndex], 'Undo draft change');
+      updateHistoryButtons();
+      render();
+    }
+
+    function redoDraftChange() {
+      if (historyIndex >= historySnapshots.length - 1) {
+        window.alert('Nothing to redo yet.');
+        return;
+      }
+      historyIndex += 1;
+      applyWorkbenchSnapshot(historySnapshots[historyIndex], 'Redo draft change');
+      updateHistoryButtons();
+      render();
+    }
+
+    function updateHistoryButtons() {
+      if (!els.undoDraftBtn || !els.redoDraftBtn) return;
+      els.undoDraftBtn.disabled = historyIndex <= 0;
+      els.redoDraftBtn.disabled = historyIndex >= historySnapshots.length - 1;
+    }
+
+    function saveDraftDecisions() {
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify(draftDecisions));
+      } catch (error) {
+        // ignore storage failures
+      }
+    }
+
+    function pruneLocalWorkbenchState() {
+      const known = new Set((model.records || []).map((item) => item.source_key));
+      state.selectedSourceKeys = (state.selectedSourceKeys || []).filter((sourceKey) => known.has(sourceKey));
+      if (state.selectedSourceKey && !known.has(state.selectedSourceKey)) {
+        state.selectedSourceKey = null;
+      }
+      const nextDrafts = {};
+      Object.entries(draftDecisions || {}).forEach(([sourceKey, payload]) => {
+        if (known.has(sourceKey)) nextDrafts[sourceKey] = payload;
+      });
+      draftDecisions = nextDrafts;
+      timelineItems = (timelineItems || []).slice(0, HISTORY_LIMIT);
+      saveState();
+      saveDraftDecisions();
+      saveSessionNotes();
+      saveTimelineItems();
+    }
+
+    function getDraftDecision(sourceKey) {
+      return draftDecisions[sourceKey] || null;
+    }
+
+    function getSelectedRecords() {
+      const selected = new Set(state.selectedSourceKeys || []);
+      return (model.records || []).filter((record) => selected.has(record.source_key));
+    }
+
+    function toggleSourceSelection(sourceKey) {
+      const selected = new Set(state.selectedSourceKeys || []);
+      if (selected.has(sourceKey)) {
+        selected.delete(sourceKey);
+      } else {
+        selected.add(sourceKey);
+      }
+      state.selectedSourceKeys = Array.from(selected);
+      saveState();
+    }
+
+    function clearSelection() {
+      state.selectedSourceKeys = [];
+      saveState();
+    }
+
+    function selectFilteredRecords() {
+      state.selectedSourceKeys = Array.from(new Set(filteredRecords.map((record) => record.source_key)));
+      saveState();
+    }
+
+    function selectReviewInboxRecords() {
+      state.selectedSourceKeys = Array.from(new Set((filteredReviewItems || []).map((item) => item.source_key)));
+      saveState();
+      recordTimeline('selection-shortcut', 'Selected sources from the current review inbox view.', { selected_count: (state.selectedSourceKeys || []).length });
+    }
+
+    function selectHighPriorityRecords() {
+      state.selectedSourceKeys = Array.from(new Set((filteredReviewItems || []).filter((item) => (item.priority || 'unknown') === 'high').map((item) => item.source_key)));
+      saveState();
+      recordTimeline('selection-shortcut', 'Selected high-priority review sources.', { selected_count: (state.selectedSourceKeys || []).length });
+    }
+
+    function buildDraftDecision(record, action, note) {
+      return {
+        source_key: record.source_key,
+        action,
+        note: note || '',
+        recorded_at: new Date().toISOString(),
+        current_stage: record.current_stage,
+        replay_mode: record.replay_mode,
+        source_system: record.source_system,
+        source_entity_type: record.source_entity_type,
+        migration_profile: record.migration_profile,
+        compare_outcome: record.compare_outcome || null,
+        approval_status: record.approval_status || null,
+        execution_status: record.execution_status || null,
+        review_priority: record.review_priority || null,
+        review_item_count: record.review_item_count || 0,
+        reason_codes: record.reason_codes || [],
+        review_stages: record.review_stages || [],
+        summary_line: record.summary_line || '',
+      };
+    }
+
+    function applyDraftToRecords(records) {
+      if (!records.length) {
+        window.alert('Select one or more rows first.');
+        return;
+      }
+      pushHistorySnapshot('Before staging draft action');
+      const action = els.draftActionSelect.value;
+      const note = (els.draftNoteInput.value || '').trim();
+      records.forEach((record) => {
+        draftDecisions[record.source_key] = buildDraftDecision(record, action, note);
+      });
+      saveDraftDecisions();
+      recordTimeline('draft-apply', 'Staged ' + action + ' for ' + records.length + ' record(s).', { action: action, source_keys: records.map((item) => item.source_key) });
+      render();
+    }
+
+    function removeDraftForSourceKeys(sourceKeys) {
+      if (!sourceKeys.length) {
+        window.alert('Select one or more rows first.');
+        return;
+      }
+      pushHistorySnapshot('Before removing draft decisions');
+      sourceKeys.forEach((sourceKey) => {
+        delete draftDecisions[sourceKey];
+      });
+      saveDraftDecisions();
+      recordTimeline('draft-remove', 'Removed draft decisions for ' + sourceKeys.length + ' record(s).', { source_keys: sourceKeys });
+      render();
+    }
+
+    function clearDraftDecisions() {
+      pushHistorySnapshot('Before clearing all draft decisions');
+      draftDecisions = {};
+      saveDraftDecisions();
+      recordTimeline('draft-clear', 'Cleared all local draft decisions.', {});
+      render();
+    }
+
+    function buildDraftPreviewLines() {
+      return Object.values(draftDecisions)
+        .sort((a, b) => String(a.source_key).localeCompare(String(b.source_key)))
+        .map((item) => JSON.stringify(item));
+    }
+
+    function exportBlob(textValue, fileName, mimeType) {
+      const blob = new Blob([textValue], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportDraftJsonl() {
+      const lines = buildDraftPreviewLines();
+      exportBlob(lines.join('
+'), 'operator_console_draft_decisions.jsonl', 'application/x-ndjson;charset=utf-8');
+    }
+
+    function exportDraftJson() {
+      const payload = {
+        exported_at: new Date().toISOString(),
+        workbench: model.workbench || {},
+        draft_count: Object.keys(draftDecisions).length,
+        decisions: Object.values(draftDecisions).sort((a, b) => String(a.source_key).localeCompare(String(b.source_key))),
+      };
+      exportBlob(JSON.stringify(payload, null, 2), 'operator_console_draft_decisions.json', 'application/json;charset=utf-8');
+    }
+
+    function buildSessionPackage() {
+      return {
+        exported_at: new Date().toISOString(),
+        schema_version: model.schema_version || 'unknown',
+        title: model.title || 'Source Replay Operator Console Alpha',
+        subtitle: model.subtitle || '',
+        workbench: model.workbench || {},
+        state: {
+          search: state.search,
+          currentStage: state.currentStage,
+          replayMode: state.replayMode,
+          sourceSystem: state.sourceSystem,
+          sourceEntityType: state.sourceEntityType,
+          compareOutcome: state.compareOutcome,
+          approvalStatus: state.approvalStatus,
+          executionStatus: state.executionStatus,
+          reviewPriority: state.reviewPriority,
+          reasonCode: state.reasonCode,
+          reviewStage: state.reviewStage,
+          sortMode: state.sortMode,
+          reviewOnly: Boolean(state.reviewOnly),
+          onlySelected: Boolean(state.onlySelected),
+          selectedSourceKey: state.selectedSourceKey || null,
+          selectedSourceKeys: Array.from(state.selectedSourceKeys || []),
+          detailTab: state.detailTab || 'overview',
+        },
+        session_notes: sessionNotes || '',
+        draft_count: Object.keys(draftDecisions || {}).length,
+        draft_decisions: Object.values(draftDecisions || {}).sort((a, b) => String(a.source_key).localeCompare(String(b.source_key))),
+        timeline: Array.from(timelineItems || []),
+      };
+    }
+
+    function exportSessionPackage() {
+      const payload = buildSessionPackage();
+      exportBlob(JSON.stringify(payload, null, 2), 'operator_console_session_package.json', 'application/json;charset=utf-8');
+      recordTimeline('session-export', 'Exported a workbench session package.', { draft_count: payload.draft_count });
+      renderTimeline();
+    }
+
+    async function copySessionSummary() {
+      const selectedCount = (state.selectedSourceKeys || []).length;
+      const visibleCount = filteredRecords.length;
+      const draftCounts = draftCountByAction();
+      const summary = [
+        'Operator console session summary',
+        'Title: ' + (model.title || 'Source Replay Operator Console Alpha'),
+        'Visible rows: ' + visibleCount,
+        'Selected rows: ' + selectedCount,
+        'Draft counts: ' + (Object.entries(draftCounts).map(([action, count]) => action + '=' + count).join(', ') || 'none'),
+        'Session notes: ' + (sessionNotes || 'none'),
+      ].join('\n');
+      try {
+        await navigator.clipboard.writeText(summary);
+      } catch (error) {
+        window.alert('Unable to copy the session summary.');
+      }
+    }
+
+    async function copyDraftPreview() {
+      const payload = buildDraftPreviewLines().join('
+');
+      try {
+        await navigator.clipboard.writeText(payload);
+      } catch (error) {
+        window.alert('Unable to copy the draft preview.');
+      }
+    }
+
+    function handleDraftFile(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const rawText = String(reader.result || '').trim();
+          if (!rawText) return;
+          let records = [];
+          if (rawText.startsWith('{') || rawText.startsWith('[')) {
+            const parsed = JSON.parse(rawText);
+            if (Array.isArray(parsed)) {
+              records = parsed;
+            } else if (parsed && Array.isArray(parsed.decisions)) {
+              records = parsed.decisions;
+            } else {
+              records = [parsed];
+            }
+          } else {
+            records = rawText.split(/
+?
+/).filter(Boolean).map((line) => JSON.parse(line));
+          }
+          const known = new Set((model.records || []).map((item) => item.source_key));
+          records.forEach((record) => {
+            if (record && known.has(record.source_key)) {
+              draftDecisions[record.source_key] = record;
+            }
+          });
+          saveDraftDecisions();
+          recordTimeline('draft-import', 'Loaded draft decisions from a local file.', { draft_count: Object.keys(draftDecisions || {}).length });
+          render();
+        } catch (error) {
+          window.alert('Unable to parse the selected draft decision file.');
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function draftCountByAction() {
+      return Object.values(draftDecisions).reduce((counts, item) => {
+        const action = item.action || 'unknown';
+        counts[action] = (counts[action] || 0) + 1;
+        return counts;
+      }, {});
     }
 
     function priorityRank(value) {
@@ -1244,6 +1841,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
       const specs = [
         ['Sources', model.rollup.source_count, 'Count of merged source rows in the console model.', null, null],
         ['Review Items', model.rollup.review_item_count, 'Count of all review queue entries merged into the console model.', 'reviewOnly', true],
+        ['Draft Decisions', Object.keys(draftDecisions).length, 'Count of local draft decisions staged in the browser workbench.', null, null],
         ['Warnings', model.rollup.warning_count, 'Derived data-health and backlog warnings based on the current replay artifacts.', null, null],
         ['Execution Ready', (model.rollup.current_stage_counts || {})['execution-ready'] || 0, 'Count of sources currently marked execution-ready.', 'currentStage', 'execution-ready'],
         ['Execution Review', (model.rollup.current_stage_counts || {})['execution-review'] || 0, 'Count of sources currently blocked in execution review.', 'currentStage', 'execution-review'],
@@ -1331,6 +1929,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
       if (state.reasonCode !== 'all' && !(record.reason_codes || []).includes(state.reasonCode)) return false;
       if (state.reviewStage !== 'all' && !(record.review_stages || []).includes(state.reviewStage)) return false;
       if (state.reviewOnly && !(record.review_item_count > 0)) return false;
+      if (state.onlySelected && !(state.selectedSourceKeys || []).includes(record.source_key)) return false;
       return true;
     }
 
@@ -1363,16 +1962,21 @@ def render_operator_console_alpha_html(model: dict) -> str:
       filteredRecords = sortRecords((model.records || []).filter(recordMatches));
       els.tableMeta.textContent = filteredRecords.length + ' visible row(s)';
       if (!filteredRecords.length) {
-        els.rows.innerHTML = '<tr><td colspan="10"><div class="empty">No rows match the current filters.</div></td></tr>';
+        els.rows.innerHTML = '<tr><td colspan="11"><div class="empty">No rows match the current filters.</div></td></tr>';
         return;
       }
+      const selectedSet = new Set(state.selectedSourceKeys || []);
       els.rows.innerHTML = filteredRecords.map((row) => {
-        const selected = state.selectedSourceKey === row.source_key;
+        const active = state.selectedSourceKey === row.source_key;
+        const checked = selectedSet.has(row.source_key);
+        const draft = getDraftDecision(row.source_key);
         const reasons = (row.reason_codes || []).slice(0, 3).map((reason) => '<span class="chip" title="Reason code carried by one or more review items for this source.">' + escapeHtml(reason) + '</span>').join('');
         const moreReasons = (row.reason_codes || []).length > 3 ? '<span class="muted">+' + ((row.reason_codes || []).length - 3) + ' more</span>' : '';
         const priorityChip = row.review_priority ? '<span class="chip ' + escapeHtml(row.review_priority) + '" title="Highest active review priority for this source.">' + escapeHtml(row.review_priority) + '</span>' : '<span class="muted">none</span>';
-        return '<tr data-source-key="' + escapeHtml(row.source_key) + '" class="' + (selected ? 'selected' : '') + '" title="Click to inspect overview, review evidence, and raw JSON for ' + escapeHtml(row.source_key) + '.">' +
-          '<td><strong>' + escapeHtml(row.source_key) + '</strong><br><span class="muted">' + escapeHtml(row.source_entity_type || '') + '</span></td>' +
+        const draftChip = draft ? '<span class="chip" title="A local draft decision is staged for this source.">draft:' + escapeHtml(draft.action || '') + '</span>' : '';
+        return '<tr data-source-key="' + escapeHtml(row.source_key) + '" class="' + (active ? 'selected' : '') + '" title="Click to inspect overview, review evidence, draft preview, and raw JSON for ' + escapeHtml(row.source_key) + '.">' +
+          '<td><input class="selection-check row-select-checkbox" data-source-key="' + escapeHtml(row.source_key) + '" type="checkbox" ' + (checked ? 'checked' : '') + ' title="Click to add or remove this row from the workbench multi-selection."></td>' +
+          '<td><strong>' + escapeHtml(row.source_key) + '</strong><br><span class="muted">' + escapeHtml(row.source_entity_type || '') + '</span>' + (draftChip ? '<div class="chip-wrap" style="margin-top:6px">' + draftChip + '</div>' : '') + '</td>' +
           '<td><span class="badge stage-' + escapeHtml((row.current_stage || 'unknown').replace(/[^a-z0-9-]/gi, '-').toLowerCase()) + '">' + escapeHtml(row.current_stage || 'unknown') + '</span></td>' +
           '<td>' + escapeHtml(row.replay_mode || '') + '</td>' +
           '<td>' + escapeHtml(row.source_system || '') + '</td>' +
@@ -1391,6 +1995,14 @@ def render_operator_console_alpha_html(model: dict) -> str:
           saveState();
           renderRows();
           renderDetail();
+          renderDraftQueue();
+        });
+      });
+      els.rows.querySelectorAll('.row-select-checkbox').forEach((checkbox) => {
+        checkbox.addEventListener('click', (event) => {
+          event.stopPropagation();
+          toggleSourceSelection(checkbox.dataset.sourceKey);
+          render();
         });
       });
     }
@@ -1405,6 +2017,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
           if (linked && linked.current_stage !== state.currentStage) return false;
         }
         if (state.replayMode !== 'all' && (item.replay_mode || 'unknown') !== state.replayMode) return false;
+        if (state.onlySelected && !(state.selectedSourceKeys || []).includes(item.source_key)) return false;
         const query = state.search.trim().toLowerCase();
         if (query) {
           const haystack = [item.source_key, item.source_system, item.review_stage, item.priority, item.summary, ...(item.reason_codes || [])].join(' ').toLowerCase();
@@ -1420,11 +2033,12 @@ def render_operator_console_alpha_html(model: dict) -> str:
       els.reviewList.innerHTML = filteredReviewItems.map((item) => {
         const active = state.selectedSourceKey === item.source_key;
         const reasons = (item.reason_codes || []).map((reason) => '<span class="chip" title="Reason code carried by this review item.">' + escapeHtml(reason) + '</span>').join('');
+        const draft = getDraftDecision(item.source_key);
         return '<div class="review-item-card ' + (active ? 'active' : '') + '" data-source-key="' + escapeHtml(item.source_key) + '" title="Click to select ' + escapeHtml(item.source_key) + ' in the main table and inspect its details.">' +
           '<div class="review-item-top"><strong>' + escapeHtml(item.source_key) + '</strong><span class="chip ' + escapeHtml(item.priority || 'unknown') + '">' + escapeHtml(item.priority || 'unknown') + '</span></div>' +
           '<div class="muted" style="margin:6px 0">' + escapeHtml(item.review_stage || '') + ' • ' + escapeHtml(item.replay_mode || '') + '</div>' +
           '<div>' + escapeHtml(item.summary || '') + '</div>' +
-          '<div class="chip-wrap" style="margin-top:8px">' + reasons + '</div>' +
+          '<div class="chip-wrap" style="margin-top:8px">' + reasons + (draft ? '<span class="chip" title="A local draft decision is staged for this source.">draft:' + escapeHtml(draft.action || '') + '</span>' : '') + '</div>' +
         '</div>';
       }).join('');
       els.reviewList.querySelectorAll('.review-item-card[data-source-key]').forEach((card) => {
@@ -1433,8 +2047,54 @@ def render_operator_console_alpha_html(model: dict) -> str:
           saveState();
           renderRows();
           renderDetail();
+          renderDraftQueue();
         });
       });
+    }
+
+    function renderDraftQueue() {
+      const drafts = Object.values(draftDecisions).sort((a, b) => String(a.source_key).localeCompare(String(b.source_key)));
+      els.draftMeta.textContent = drafts.length + ' staged draft decision(s)';
+      if (!drafts.length) {
+        els.draftList.innerHTML = '<div class="empty">No local draft decisions have been staged yet.</div>';
+        return;
+      }
+      els.draftList.innerHTML = drafts.map((item) => {
+        const active = state.selectedSourceKey === item.source_key;
+        return '<div class="draft-card ' + (active ? 'active' : '') + '" data-source-key="' + escapeHtml(item.source_key) + '" title="Click to focus this source and open its draft preview.">' +
+          '<div class="review-item-top"><strong>' + escapeHtml(item.source_key) + '</strong><span class="chip">' + escapeHtml(item.action || 'draft') + '</span></div>' +
+          '<div class="muted" style="margin:6px 0">' + escapeHtml(item.current_stage || 'unknown') + ' • ' + escapeHtml(item.replay_mode || 'unknown') + '</div>' +
+          '<div>' + escapeHtml(item.note || 'No operator note provided.') + '</div>' +
+        '</div>';
+      }).join('');
+      els.draftList.querySelectorAll('.draft-card[data-source-key]').forEach((card) => {
+        card.addEventListener('click', () => {
+          state.selectedSourceKey = card.dataset.sourceKey;
+          state.detailTab = 'draft';
+          saveState();
+          renderRows();
+          renderDetail();
+          renderDraftQueue();
+        });
+      });
+    }
+
+    function renderTimeline() {
+      const items = timelineItems || [];
+      els.timelineMeta.textContent = items.length + ' local event(s)';
+      if (!items.length) {
+        els.timelineList.innerHTML = '<div class="empty">No local session events yet. Exporting, importing, selecting shortcuts, and draft actions will appear here.</div>';
+        return;
+      }
+      els.timelineList.innerHTML = items.map((item, index) => {
+        const message = item.message || item.event_type || 'local event';
+        const meta = item.meta && Object.keys(item.meta).length ? '<div class="muted" style="margin-top:6px">' + escapeHtml(JSON.stringify(item.meta)) + '</div>' : '';
+        return '<div class="review-item-card" title="This timeline item is informational only. It does not change backend state.">' +
+          '<div class="review-item-top"><strong>' + escapeHtml(message) + '</strong><span class="chip">' + escapeHtml(item.event_type || 'event') + '</span></div>' +
+          '<div class="muted" style="margin-top:6px">' + escapeHtml(item.recorded_at || '') + '</div>' +
+          meta +
+        '</div>';
+      }).join('');
     }
 
     function renderDetail() {
@@ -1443,10 +2103,12 @@ def render_operator_console_alpha_html(model: dict) -> str:
         els.detailMeta.textContent = 'No selection';
         els.panelOverview.innerHTML = '<div class="empty">Select a row to inspect details.</div>';
         els.panelReviewItems.innerHTML = '<div class="empty">Select a row to inspect its review items.</div>';
+        els.panelDraftPreview.innerHTML = '<div class="empty">Select a row to inspect or stage draft decisions.</div>';
         els.panelRawJson.textContent = 'Select a row to inspect details.';
         return;
       }
       state.selectedSourceKey = record.source_key;
+      const draft = getDraftDecision(record.source_key);
       els.detailMeta.textContent = record.source_key + ' • ' + (record.summary_line || '');
       const overviewItems = [
         ['Source key', record.source_key],
@@ -1459,26 +2121,42 @@ def render_operator_console_alpha_html(model: dict) -> str:
         ['Approval status', record.approval_status || 'n/a'],
         ['Approval decision', record.approval_decision || 'n/a'],
         ['Execution status', record.execution_status || 'n/a'],
-        ['Review priority', record.review_priority || 'none'],
-        ['Review item count', record.review_item_count || 0],
+        ['Review priority', record.review_priority || 'n/a'],
+        ['Review item count', String(record.review_item_count || 0)],
+        ['Draft action', draft ? draft.action : 'none'],
+        ['Draft note', draft ? (draft.note || 'No note provided.') : 'none'],
       ];
-      els.panelOverview.innerHTML = '<div class="overview-grid">' + overviewItems.map(([label, value]) => (
-        '<div class="overview-item"><strong>' + escapeHtml(label) + '</strong><div>' + escapeHtml(value) + '</div></div>'
-      )).join('') + '</div>' +
-      '<div style="margin-top:12px" class="overview-item"><strong>Reason Codes</strong><div class="chip-wrap">' + ((record.reason_codes || []).map((reason) => '<span class="chip" title="Reason code derived from one or more review queues for this source.">' + escapeHtml(reason) + '</span>').join('') || '<span class="muted">No active reason codes.</span>') + '</div></div>';
+      els.panelOverview.innerHTML = '<div class="overview-grid">' + overviewItems.map(([label, value]) => '<div class="overview-item"><strong>' + escapeHtml(label) + '</strong><div>' + escapeHtml(value) + '</div></div>').join('') + '</div>';
 
-      const reviewItems = record.review_items || [];
-      els.panelReviewItems.innerHTML = reviewItems.length ? reviewItems.map((item) => (
-        '<div class="overview-item" style="margin-bottom:10px"><strong>' + escapeHtml(item.review_stage || 'review-item') + ' • ' + escapeHtml(item.priority || 'unknown') + '</strong>' +
-        '<div style="margin-bottom:8px">' + escapeHtml(item.summary || '') + '</div>' +
-        '<div class="chip-wrap" style="margin-bottom:8px">' + ((item.reason_codes || []).map((reason) => '<span class="chip" title="Reason code attached to this review item.">' + escapeHtml(reason) + '</span>').join('') || '<span class="muted">No reason codes.</span>') + '</div>' +
-        '<pre>' + escapeHtml(JSON.stringify(item.detail || {}, null, 2)) + '</pre>' +
-        '</div>'
-      )).join('') : '<div class="empty">This record currently has no active review items.</div>';
+      if (record.review_items && record.review_items.length) {
+        els.panelReviewItems.innerHTML = '<div class="review-list">' + record.review_items.map((item) => {
+          const reasons = (item.reason_codes || []).map((reason) => '<span class="chip">' + escapeHtml(reason) + '</span>').join('');
+          return '<div class="review-item-card active" title="This card summarizes one review queue item for the selected source.">' +
+            '<div class="review-item-top"><strong>' + escapeHtml(item.review_stage || 'review') + '</strong><span class="chip ' + escapeHtml(item.priority || 'unknown') + '">' + escapeHtml(item.priority || 'unknown') + '</span></div>' +
+            '<div class="muted" style="margin:6px 0">' + escapeHtml(item.summary || '') + '</div>' +
+            '<div class="chip-wrap">' + reasons + '</div>' +
+            '<pre style="margin-top:8px">' + escapeHtml(JSON.stringify(item.detail || item, null, 2)) + '</pre>' +
+          '</div>';
+        }).join('') + '</div>';
+      } else {
+        els.panelReviewItems.innerHTML = '<div class="empty">The selected source has no active review items.</div>';
+      }
 
+      const draftPreview = draft ? draft : {
+        source_key: record.source_key,
+        action: 'none',
+        note: '',
+        current_stage: record.current_stage,
+        replay_mode: record.replay_mode,
+        source_system: record.source_system,
+        source_entity_type: record.source_entity_type,
+        review_item_count: record.review_item_count || 0,
+        preview_only: true,
+      };
+      const draftHelp = draft ? 'This is the current local draft decision for the selected source. Export Draft JSONL or Draft Summary JSON to save it outside the browser.' : 'No local draft decision has been staged for this source yet. Use the workbench controls above to draft approve, reject, or defer actions.';
+      els.panelDraftPreview.innerHTML = '<div class="section-card" title="This panel previews the local draft decision state for the selected source only."><div class="section-title">Local Draft Decision ' + helpTab(draftHelp) + '</div><pre style="margin-top:12px">' + escapeHtml(JSON.stringify(draftPreview, null, 2)) + '</pre></div>';
       els.panelRawJson.textContent = JSON.stringify(record, null, 2);
       setActiveDetailTab(state.detailTab || 'overview');
-      saveState();
     }
 
     function setActiveDetailTab(name) {
@@ -1487,11 +2165,13 @@ def render_operator_console_alpha_html(model: dict) -> str:
       const tabs = {
         overview: els.tabOverview,
         review: els.tabReviewItems,
+        draft: els.tabDraftPreview,
         raw: els.tabRawJson,
       };
       const panels = {
         overview: els.panelOverview,
         review: els.panelReviewItems,
+        draft: els.panelDraftPreview,
         raw: els.panelRawJson,
       };
       Object.entries(tabs).forEach(([key, button]) => {
@@ -1515,13 +2195,23 @@ def render_operator_console_alpha_html(model: dict) -> str:
       populateSelect(els.reasonFilter, model.filter_options.reason_code || [], 'Reason: ', state.reasonCode);
       populateSelect(els.queueFilter, model.filter_options.review_stage || [], 'Queue: ', state.reviewStage);
       els.sortFilter.value = state.sortMode;
+      if (els.sessionNotesInput) {
+        els.sessionNotesInput.value = sessionNotes || '';
+      }
       els.reviewOnlyToggle.textContent = 'Only Review Items: ' + (state.reviewOnly ? 'On' : 'Off');
       els.reviewOnlyToggle.classList.toggle('active', state.reviewOnly);
+      els.selectedOnlyToggle.textContent = 'Only Selected: ' + (state.onlySelected ? 'On' : 'Off');
+      els.selectedOnlyToggle.classList.toggle('active', state.onlySelected);
+      els.workbenchMeta.textContent = Object.keys(draftDecisions).length + ' draft(s) • ' + (state.selectedSourceKeys || []).length + ' selected row(s)';
+      els.selectionMeta.textContent = (state.selectedSourceKeys || []).length + ' selected row(s) • active row: ' + (state.selectedSourceKey || 'none');
+      updateHistoryButtons();
     }
 
     function renderFilteredSummary() {
       const filteredHighPriority = filteredReviewItems.filter((item) => (item.priority || 'unknown') === 'high').length;
-      els.filteredSummary.textContent = filteredRecords.length + ' visible source row(s) • ' + filteredReviewItems.length + ' visible review item(s) • ' + filteredHighPriority + ' high-priority item(s)';
+      const draftCounts = draftCountByAction();
+      const draftSummary = Object.entries(draftCounts).map(([action, count]) => action + ':' + count).join(', ') || 'no drafts';
+      els.filteredSummary.textContent = filteredRecords.length + ' visible source row(s) • ' + filteredReviewItems.length + ' visible review item(s) • ' + filteredHighPriority + ' high-priority item(s) • ' + (state.selectedSourceKeys || []).length + ' selected • ' + draftSummary;
     }
 
     function exportFilteredJson() {
@@ -1573,6 +2263,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
     }
 
     function render() {
+      pruneLocalWorkbenchState();
       setSubtitle();
       renderWarnings();
       renderSummaryCards();
@@ -1580,6 +2271,8 @@ def render_operator_console_alpha_html(model: dict) -> str:
       renderBoard(els.queueBoard, model.rollup.review_item_stage_counts || {}, 'reviewStage', 'Filter the table by review queue stage.');
       renderRows();
       renderReviewInbox();
+      renderDraftQueue();
+      renderTimeline();
       renderDetail();
       renderFilteredSummary();
     }
@@ -1598,6 +2291,7 @@ def render_operator_console_alpha_html(model: dict) -> str:
       state.reviewStage = 'all';
       state.sortMode = 'priority-stage-key';
       state.reviewOnly = false;
+      state.onlySelected = false;
       syncControlsFromState();
       render();
     }
@@ -1614,7 +2308,10 @@ def render_operator_console_alpha_html(model: dict) -> str:
             return;
           }
           model = parsed;
-          state.selectedSourceKey = model.records[0] ? model.records[0].source_key : null;
+          if (!state.selectedSourceKey && model.records[0]) {
+            state.selectedSourceKey = model.records[0].source_key;
+          }
+          pruneLocalWorkbenchState();
           syncControlsFromState();
           render();
         } catch (error) {
@@ -1637,19 +2334,51 @@ def render_operator_console_alpha_html(model: dict) -> str:
     els.queueFilter.addEventListener('change', () => { state.reviewStage = els.queueFilter.value; saveState(); render(); });
     els.sortFilter.addEventListener('change', () => { state.sortMode = els.sortFilter.value; saveState(); render(); });
     els.reviewOnlyToggle.addEventListener('click', () => { state.reviewOnly = !state.reviewOnly; saveState(); syncControlsFromState(); render(); });
+    els.selectedOnlyToggle.addEventListener('click', () => { state.onlySelected = !state.onlySelected; saveState(); syncControlsFromState(); render(); });
     els.resetFiltersBtn.addEventListener('click', resetFilters);
     els.exportJsonBtn.addEventListener('click', exportFilteredJson);
     els.exportCsvBtn.addEventListener('click', exportFilteredCsv);
     els.copySelectedBtn.addEventListener('click', copySelectedJson);
     els.loadModelInput.addEventListener('change', handleModelFile);
+    els.selectFilteredBtn.addEventListener('click', () => { selectFilteredRecords(); recordTimeline('selection-shortcut', 'Selected filtered rows.', { selected_count: (state.selectedSourceKeys || []).length }); render(); });
+    els.selectReviewInboxBtn.addEventListener('click', () => { selectReviewInboxRecords(); render(); });
+    els.selectHighPriorityBtn.addEventListener('click', () => { selectHighPriorityRecords(); render(); });
+    els.clearSelectionBtn.addEventListener('click', () => { clearSelection(); recordTimeline('selection-clear', 'Cleared selected rows.', {}); render(); });
+    els.applyDraftSelectedBtn.addEventListener('click', () => applyDraftToRecords(getSelectedRecords()));
+    els.applyDraftActiveBtn.addEventListener('click', () => {
+      const record = getSelectedRecord();
+      if (!record) {
+        window.alert('Select a row first.');
+        return;
+      }
+      applyDraftToRecords([record]);
+    });
+    els.removeDraftSelectedBtn.addEventListener('click', () => removeDraftForSourceKeys((state.selectedSourceKeys || [])));
+    els.clearDraftsBtn.addEventListener('click', clearDraftDecisions);
+    els.exportDraftJsonlBtn.addEventListener('click', exportDraftJsonl);
+    els.exportDraftJsonBtn.addEventListener('click', exportDraftJson);
+    els.copyDraftPreviewBtn.addEventListener('click', copyDraftPreview);
+    els.loadDraftInput.addEventListener('change', handleDraftFile);
+    els.exportSessionBtn.addEventListener('click', exportSessionPackage);
+    els.loadSessionInput.addEventListener('change', handleSessionFile);
+    els.undoDraftBtn.addEventListener('click', undoDraftChange);
+    els.redoDraftBtn.addEventListener('click', redoDraftChange);
+    els.copySessionSummaryBtn.addEventListener('click', copySessionSummary);
+    els.sessionNotesInput.addEventListener('input', () => { sessionNotes = els.sessionNotesInput.value || ''; saveSessionNotes(); recordTimeline('session-notes', 'Updated local session notes.', { length: sessionNotes.length }); renderTimeline(); });
     els.tabOverview.addEventListener('click', () => setActiveDetailTab('overview'));
     els.tabReviewItems.addEventListener('click', () => setActiveDetailTab('review'));
+    els.tabDraftPreview.addEventListener('click', () => setActiveDetailTab('draft'));
     els.tabRawJson.addEventListener('click', () => setActiveDetailTab('raw'));
 
     if (!state.selectedSourceKey && model.records && model.records.length) {
       state.selectedSourceKey = model.records[0].source_key;
     }
+    pruneLocalWorkbenchState();
+    if (!timelineItems.length) {
+      recordTimeline('session-start', 'Opened operator console workbench session.', { source_count: (model.records || []).length });
+    }
     syncControlsFromState();
+    pushHistorySnapshot('Initial workbench snapshot');
     render();
   </script>
 </body>

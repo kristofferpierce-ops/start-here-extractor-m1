@@ -1593,3 +1593,63 @@ def test_operator_console_alpha_html_contains_triage_controls_and_tooltips() -> 
     assert "Current Stage Board" in html_doc
     assert "Review Queue Board" in html_doc
     assert "data-help=" in html_doc
+
+def test_operator_console_alpha_artifacts_include_workbench_spec() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    model = console["operator_console_alpha_model"]
+    rollup = console["operator_console_alpha_rollup"]
+
+    assert model["workbench"]["mode"] == "draft-only-local"
+    assert model["workbench"]["client_side_only"] is True
+    assert model["workbench"]["mutates_backend"] is False
+    assert "draft-decisions" in model["workbench"]["capabilities"]
+    assert "draft-preview" in model["workbench"]["capabilities"]
+    assert rollup["workbench_capability_count"] == len(model["workbench"]["capabilities"])
+    assert model["summary"]["draft_action_count"] == len(model["workbench"]["decision_actions"])
+
+
+def test_operator_console_alpha_html_contains_operator_workbench_controls() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    html_doc = console["operator_console_alpha_html"]["html"]
+
+    assert "Operator Workbench" in html_doc
+    assert "Select Filtered Rows" in html_doc
+    assert "Only Selected" in html_doc
+    assert "Draft Action" in html_doc
+    assert "Apply Draft to Selected" in html_doc
+    assert "Apply Draft to Active Row" in html_doc
+    assert "Export Draft JSONL" in html_doc
+    assert "Export Draft Summary JSON" in html_doc
+    assert "Copy Draft Preview" in html_doc
+    assert "Load Draft Decisions" in html_doc
+    assert "Draft Decision Queue" in html_doc
+    assert "Draft Preview" in html_doc
+    assert "data-help=" in html_doc
+
+def test_operator_console_alpha_artifacts_include_session_package_spec() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    model = console["operator_console_alpha_model"]
+    rollup = console["operator_console_alpha_rollup"]
+
+    assert "session-packages" in model["workbench"]["capabilities"]
+    assert "undo-redo-history" in model["workbench"]["capabilities"]
+    assert "local-audit-timeline" in model["workbench"]["capabilities"]
+    assert model["workbench"]["session_formats"] == ["json"]
+    assert model["workbench"]["history_limit"] >= 20
+    assert model["summary"]["session_format_count"] == len(model["workbench"]["session_formats"])
+    assert rollup["session_format_count"] == len(model["workbench"]["session_formats"])
+
+
+def test_operator_console_alpha_html_contains_session_package_controls() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    html_doc = console["operator_console_alpha_html"]["html"]
+
+    assert "Save Session Package" in html_doc
+    assert "Load Session Package" in html_doc
+    assert "Undo Draft Change" in html_doc
+    assert "Redo Draft Change" in html_doc
+    assert "Copy Session Summary" in html_doc
+    assert "Session Notes" in html_doc
+    assert "Session Timeline" in html_doc
+    assert "Select Review Inbox" in html_doc
+    assert "Select High Priority" in html_doc
