@@ -1562,3 +1562,34 @@ def test_operator_console_alpha_scripts_write_expected_artifacts(tmp_path: Path)
     assert rollup["source_count"] == 4
     assert model["summary"]["execution_pack_count"] == 2
     assert "Source Replay Operator Console Alpha" in html_text
+
+def test_operator_console_alpha_artifacts_include_review_inbox_and_filter_options() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    model = console["operator_console_alpha_model"]
+    rollup = console["operator_console_alpha_rollup"]
+
+    assert model["summary"]["review_item_count"] == rollup["review_item_count"]
+    assert model["review_items"]
+    assert "current_stage" in model["filter_options"]
+    assert "review_priority" in model["filter_options"]
+    assert "reason_code" in model["filter_options"]
+    assert "execution-review" in model["filter_options"]["current_stage"]
+    assert rollup["review_item_stage_counts"]["execution-review"] >= 1
+    assert rollup["review_priority_counts"]
+    assert rollup["warning_count"] == len(model["warnings"])
+
+
+def test_operator_console_alpha_html_contains_triage_controls_and_tooltips() -> None:
+    _, _, _, _, console = build_m6e_block1_documents()
+    html_doc = console["operator_console_alpha_html"]["html"]
+
+    assert "Only Review Items" in html_doc
+    assert "Export Filtered JSON" in html_doc
+    assert "Export Filtered CSV" in html_doc
+    assert "Load Model JSON" in html_doc
+    assert "Review Inbox" in html_doc
+    assert "Reason Code Filter" in html_doc
+    assert "Copy Selected JSON" in html_doc
+    assert "Current Stage Board" in html_doc
+    assert "Review Queue Board" in html_doc
+    assert "data-help=" in html_doc

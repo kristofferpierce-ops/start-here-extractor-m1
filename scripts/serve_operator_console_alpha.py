@@ -3,8 +3,25 @@ from __future__ import annotations
 import argparse
 import webbrowser
 from functools import partial
+from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+class OperatorConsoleHandler(SimpleHTTPRequestHandler):
+    def end_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path in {"/", ""}:
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", "/operator_console_alpha.html")
+            self.end_headers()
+            return
+        super().do_GET()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -28,7 +45,7 @@ def main() -> int:
     if not target.exists():
         raise SystemExit(f"operator console file not found: {target}")
 
-    handler = partial(SimpleHTTPRequestHandler, directory=str(console_dir))
+    handler = partial(OperatorConsoleHandler, directory=str(console_dir))
     server = ThreadingHTTPServer((args.host, args.port), handler)
     url = f"http://{args.host}:{server.server_port}/operator_console_alpha.html"
     print(url)

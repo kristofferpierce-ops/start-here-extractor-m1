@@ -13,7 +13,7 @@ from start_here_extractor.source_replay_execution import load_approval_documents
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Build a local operator console alpha from replay plan, compare, approval, and execution artifacts"
+        description="Build an enriched read-only operator console from replay plan, compare, approval, and execution artifacts"
     )
     parser.add_argument("--plan-dir", required=True, help="Directory containing source replay plan artifacts")
     parser.add_argument("--compare-dir", required=True, help="Directory containing source replay compare artifacts")
@@ -25,6 +25,12 @@ def build_parser() -> argparse.ArgumentParser:
         required=False,
         default="Source Replay Operator Console Alpha",
         help="Title displayed in the generated operator console",
+    )
+    parser.add_argument(
+        "--subtitle",
+        required=False,
+        default="Read-only operator console for replay planning, comparison, approval, and execution triage.",
+        help="Subtitle displayed in the generated operator console",
     )
     return parser
 
@@ -42,6 +48,7 @@ def main() -> int:
         approval_documents=approval_documents,
         execution_documents=execution_documents,
         title=args.title,
+        subtitle=args.subtitle,
     )
     write_operator_console_alpha_artifacts(args.out_dir, artifacts)
     return 0

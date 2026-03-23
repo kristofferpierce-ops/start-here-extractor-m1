@@ -736,3 +736,30 @@ Example build:
 Example local launch:
 
     python scripts/serve_operator_console_alpha.py --console-dir out/operator-console-alpha
+
+## M6E Block 2
+
+This block upgrades the operator console alpha into a richer read-only triage console without introducing live writes.
+
+Added in this block:
+- `src/start_here_extractor/operator_console_alpha.py` enhancements
+- `scripts/build_operator_console_alpha.py` subtitle support
+- `scripts/serve_operator_console_alpha.py` no-cache local serving and root redirect
+- targeted `tests/test_milestone6.py` coverage
+
+New operator-console capabilities:
+- richer filter set for stage, mode, system, entity, compare outcome, approval status, execution status, priority, reason code, and review queue stage
+- clickable stage and review-queue boards for fast triage
+- review inbox panel ordered by priority
+- detail tabs for overview, review items, and raw JSON
+- filtered JSON and CSV export
+- copy-selected-record JSON
+- load alternate operator console model JSON for local testing
+- persistent local filter state
+- hover help on controls, cards, tabs, table rows, and review items
+
+Safety posture remains unchanged:
+- read-only
+- client-side
+- no live downstream writes
+- no approval or execution mutations triggered from the UI
